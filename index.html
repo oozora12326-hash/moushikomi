@@ -1,288 +1,848 @@
-/**
- * 申し込み管理システム（moushikomi-59749）Firestore 自動バックアップ GAS
- * - Googleドライブの指定フォルダへ JSON バックアップを保存（復元用）
- * - 紐づいたGoogleスプレッドシートへ「申込一覧」「フォルダ一覧」を書き出し
- */
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>申し込み管理システム</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      doc,
+      addDoc,
+      setDoc,
+      deleteDoc,
+      onSnapshot,
+      query,
+      orderBy,
+      writeBatch
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-const FIRESTORE_PROJECT_ID = 'moushikomi-59749';
-const BACKUP_DRIVE_FOLDER_NAME = '申し込み管理_自動バックアップ';
-const BACKUP_DRIVE_FOLDER_ID = ''; // 特定の既存フォルダIDに固定したい場合はここに入力（例: '1AbCdEfGhIj...'）
-const KEEP_DAYS = 30; // この日数を過ぎたJSONバックアップをゴミ箱へ移動（0にすると削除しない）
+    const firebaseConfig = {
+      apiKey: "AIzaSyD-moushikomi59749-demo",
+      authDomain: "moushikomi-59749.firebaseapp.com",
+      projectId: "moushikomi-59749",
+      storageBucket: "moushikomi-59749.appspot.com",
+      messagingSenderId: "000000000000",
+      appId: "1:000000000000:web:moushikomi59749"
+    };
 
-/**
- * 毎日自動実行（トリガー）用のメイン関数
- */
-function runDailyFirestoreBackup() {
-  const now = new Date();
-  const timestampLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMMdd_HHmm');
-  const displayTime = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+    const ADMIN_PASSCODE = "admin1234"; // 必要に応じて変更してください
 
-  // 1. Firestore から events と submissions を全件取得
-  const events = fetchAllDocuments('events');
-  const submissions = fetchAllDocuments('submissions');
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
 
-  // 2. 復元用 JSON ペイロード作成
-  const backupPayload = {
-    appName: 'moushikomi-kanri',
-    projectId: FIRESTORE_PROJECT_ID,
-    exportedAt: now.toISOString(),
-    exportedAtJst: displayTime,
-    counts: {
-      events: events.length,
-      submissions: submissions.length
-    },
-    events: events,
-    submissions: submissions
-  };
+    const state = {
+      events: [],
+      submissions: [],
+      selectedEventId: "",
+      adminEventId: "ALL",
+      isAdminAuthenticated: false,
+      activeTab: "apply" // "apply" | "admin"
+    };
 
-  const jsonString = JSON.stringify(backupPayload, null, 2);
-  const fileName = `申し込みバックアップ_${timestampLabel}.json`;
+    function showToast(message, type = "info") {
+      const container = document.getElementById("toastContainer");
+      const toast = document.createElement("div");
+      const bg =
+        type === "error"
+          ? "bg-red-600 text-white"
+          : type === "success"
+          ? "bg-emerald-600 text-white"
+          : "bg-slate-800 text-white";
+      toast.className = `${bg} px-4 py-3 rounded-xl shadow-lg text-sm font-medium transition-opacity duration-300`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = "0";
+        setTimeout(() => toast.remove(), 300);
+      }, 3200);
+    }
 
-  // 3. Googleドライブに JSON 保存＆古いファイルの整理
-  const folder = getTargetBackupFolder();
-  const savedFile = saveJsonToDrive(folder, fileName, jsonString);
-  if (KEEP_DAYS > 0) {
-    cleanupOldBackups(folder, KEEP_DAYS);
-  }
+    function formatDateTime(ts) {
+      if (!ts) return "";
+      const d = typeof ts === "number" ? new Date(ts) : new Date(ts);
+      if (isNaN(d.getTime())) return String(ts);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
 
-  // 4. スプレッドシートに一覧を書き出し
-  writeToSpreadsheet(events, submissions, displayTime);
+    function escapeCsv(val) {
+      const s = val === null || val === undefined ? "" : String(val);
+      return `"${s.replace(/"/g, '""')}"`;
+    }
 
-  Logger.log(
-    `バックアップ完了: ${savedFile.getName()} (フォルダ: ${events.length}件, 申込: ${submissions.length}件)`
-  );
-}
+    function renderEventOptions() {
+      const applySelect = document.getElementById("applyEventSelect");
+      const adminFilterSelect = document.getElementById("adminEventFilter");
 
-/**
- * Firestore REST API から指定コレクションの全ドキュメントを取得
- */
-function fetchAllDocuments(collectionName) {
-  const results = [];
-  let pageToken = null;
+      if (applySelect) {
+        const prev = state.selectedEventId;
+        applySelect.innerHTML = `<option value="">申し込みフォルダを選択してください</option>`;
+        state.events.forEach((ev) => {
+          const opt = document.createElement("option");
+          opt.value = ev.id;
+          opt.textContent = ev.name || "(名称未設定)";
+          if (ev.id === prev) opt.selected = true;
+          applySelect.appendChild(opt);
+        });
+      }
 
-  do {
-    const baseUrl =
-      `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FIRESTORE_PROJECT_ID)}` +
-      `/databases/(default)/documents/${encodeURIComponent(collectionName)}?pageSize=300`;
-    const url = pageToken ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}` : baseUrl;
+      if (adminFilterSelect) {
+        const prev = state.adminEventId;
+        adminFilterSelect.innerHTML = `<option value="ALL">すべてのフォルダ（${state.submissions.length}件）</option>`;
+        state.events.forEach((ev) => {
+          const count = state.submissions.filter((s) => s.eventId === ev.id).length;
+          const opt = document.createElement("option");
+          opt.value = ev.id;
+          opt.textContent = `${ev.name || "(名称未設定)"}（${count}件）`;
+          if (ev.id === prev) opt.selected = true;
+          adminFilterSelect.appendChild(opt);
+        });
+      }
+    }
 
-    const response = UrlFetchApp.fetch(url, {
-      method: 'get',
-      muteHttpExceptions: true
-    });
+    function renderAdminEventsList() {
+      const listEl = document.getElementById("adminEventsList");
+      if (!listEl) return;
 
-    const statusCode = response.getResponseCode();
-    const bodyText = response.getContentText();
+      if (state.events.length === 0) {
+        listEl.innerHTML = `<p class="text-sm text-slate-500">申し込みフォルダはまだありません。</p>`;
+        return;
+      }
 
-    if (statusCode < 200 || statusCode >= 300) {
-      throw new Error(
-        `Firestore取得エラー (${collectionName} / HTTP ${statusCode}): ${bodyText}`
+      listEl.innerHTML = state.events
+        .map((ev) => {
+          const count = state.submissions.filter((s) => s.eventId === ev.id).length;
+          return `
+            <div class="flex items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <div>
+                <div class="font-semibold text-slate-800">${escapeHtml(ev.name || "")}</div>
+                <div class="text-xs text-slate-500">ID: ${escapeHtml(ev.id)} / 申込数: ${count}件</div>
+              </div>
+              <button
+                type="button"
+                data-delete-event="${escapeHtml(ev.id)}"
+                class="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg border border-red-200"
+              >
+                削除
+              </button>
+            </div>
+          `;
+        })
+        .join("");
+
+      listEl.querySelectorAll("[data-delete-event]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-delete-event");
+          const ev = state.events.find((x) => x.id === id);
+          if (!confirm(`フォルダ「${ev?.name || id}」を削除しますか？（申込データは残ります）`)) return;
+          try {
+            await deleteDoc(doc(db, "events", id));
+            showToast("フォルダを削除しました", "success");
+          } catch (err) {
+            console.error(err);
+            showToast("削除に失敗しました", "error");
+          }
+        });
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function getFilteredSubmissions() {
+      const keyword = (document.getElementById("adminSearchInput")?.value || "").trim().toLowerCase();
+      return state.submissions.filter((item) => {
+        const matchEvent = state.adminEventId === "ALL" || item.eventId === state.adminEventId;
+        if (!matchEvent) return false;
+        if (!keyword) return true;
+        const targetText = [
+          item.eventName,
+          item.name,
+          item.kana,
+          item.grade,
+          item.gender,
+          item.birthDate,
+          item.category,
+          item.address,
+          item.phone
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return targetText.includes(keyword);
+      });
+    }
+
+    function renderSubmissionsTable() {
+      const tbody = document.getElementById("submissionsTableBody");
+      const countBadge = document.getElementById("filteredCountLabel");
+      if (!tbody) return;
+
+      const filtered = getFilteredSubmissions();
+      if (countBadge) {
+        countBadge.textContent = `${filtered.length}件表示`;
+      }
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="12" class="px-4 py-8 text-center text-sm text-slate-500">
+              該当する申し込みデータはありません。
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = filtered
+        .map((item, idx) => {
+          const evName =
+            item.eventName ||
+            state.events.find((e) => e.id === item.eventId)?.name ||
+            item.eventId ||
+            "";
+          return `
+            <tr class="hover:bg-slate-50 border-b border-slate-100 text-xs sm:text-sm">
+              <td class="px-3 py-2.5 text-slate-500 whitespace-nowrap">${idx + 1}</td>
+              <td class="px-3 py-2.5 font-medium text-slate-800 whitespace-nowrap">${escapeHtml(evName)}</td>
+              <td class="px-3 py-2.5 font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(item.name || "")}</td>
+              <td class="px-3 py-2.5 text-slate-600 whitespace-nowrap">${escapeHtml(item.kana || "")}</td>
+              <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.grade || "")}</td>
+              <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.gender || "")}</td>
+              <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.birthDate || "")}</td>
+              <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.category || "")}</td>
+              <td class="px-3 py-2.5 text-slate-700 min-w-[180px]">${escapeHtml(item.address || "")}</td>
+              <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.phone || "")}</td>
+              <td class="px-3 py-2.5 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
+              <td class="px-3 py-2.5 whitespace-nowrap">
+                <button
+                  type="button"
+                  data-delete-sub="${escapeHtml(item.id)}"
+                  class="px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg border border-red-200"
+                >
+                  削除
+                </button>
+              </td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      tbody.querySelectorAll("[data-delete-sub]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-delete-sub");
+          if (!confirm("この申し込みデータを削除しますか？")) return;
+          try {
+            await deleteDoc(doc(db, "submissions", id));
+            showToast("申し込みデータを削除しました", "success");
+          } catch (err) {
+            console.error(err);
+            showToast("削除に失敗しました", "error");
+          }
+        });
+      });
+    }
+
+    function switchTab(tab) {
+      state.activeTab = tab;
+      const applySection = document.getElementById("applySection");
+      const adminSection = document.getElementById("adminSection");
+      const tabApply = document.getElementById("tabApply");
+      const tabAdmin = document.getElementById("tabAdmin");
+
+      if (tab === "apply") {
+        applySection.classList.remove("hidden");
+        adminSection.classList.add("hidden");
+        tabApply.className = "px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white";
+        tabAdmin.className = "px-4 py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200";
+      } else {
+        applySection.classList.add("hidden");
+        adminSection.classList.remove("hidden");
+        tabAdmin.className = "px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white";
+        tabApply.className = "px-4 py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200";
+        renderAdminGate();
+      }
+    }
+
+    function renderAdminGate() {
+      const lockBox = document.getElementById("adminLockBox");
+      const dashboardBox = document.getElementById("adminDashboardBox");
+      if (state.isAdminAuthenticated) {
+        lockBox.classList.add("hidden");
+        dashboardBox.classList.remove("hidden");
+        renderAdminEventsList();
+        renderSubmissionsTable();
+      } else {
+        lockBox.classList.remove("hidden");
+        dashboardBox.classList.add("hidden");
+      }
+    }
+
+    function exportJsonBackup() {
+      const payload = {
+        appName: "moushikomi-kanri",
+        projectId: firebaseConfig.projectId,
+        exportedAt: new Date().toISOString(),
+        counts: {
+          events: state.events.length,
+          submissions: state.submissions.length
+        },
+        events: state.events,
+        submissions: state.submissions
+      };
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      const fileName = `申し込みバックアップ_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.json`;
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("JSONバックアップをダウンロードしました", "success");
+    }
+
+    async function restoreJsonBackup(file) {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+
+      const eventsList = Array.isArray(parsed.events) ? parsed.events : [];
+      const submissionsList = Array.isArray(parsed.submissions) ? parsed.submissions : [];
+
+      if (eventsList.length === 0 && submissionsList.length === 0) {
+        throw new Error("復元できるイベントまたは申し込みデータが見つかりませんでした。");
+      }
+
+      if (
+        !confirm(
+          `JSONファイルから復元しますか？\nフォルダ: ${eventsList.length}件 / 申込データ: ${submissionsList.length}件\n※同じIDのデータは上書きされます。`
+        )
+      ) {
+        return;
+      }
+
+      const allOps = [];
+      eventsList.forEach((ev) => {
+        if (ev && ev.id) {
+          const { id, ...rest } = ev;
+          allOps.push({ col: "events", id: String(id), data: rest });
+        }
+      });
+      submissionsList.forEach((sub) => {
+        if (sub && sub.id) {
+          const { id, ...rest } = sub;
+          allOps.push({ col: "submissions", id: String(id), data: rest });
+        }
+      });
+
+      const chunkSize = 400;
+      for (let i = 0; i < allOps.length; i += chunkSize) {
+        const batch = writeBatch(db);
+        const slice = allOps.slice(i, i + chunkSize);
+        slice.forEach((op) => {
+          const ref = doc(db, op.col, op.id);
+          batch.set(ref, op.data, { merge: true });
+        });
+        await batch.commit();
+      }
+
+      showToast(
+        `復元が完了しました（フォルダ: ${eventsList.length}件 / 申込: ${submissionsList.length}件）`,
+        "success"
       );
     }
 
-    const data = JSON.parse(bodyText);
-    const documents = Array.isArray(data.documents) ? data.documents : [];
-
-    documents.forEach((doc) => {
-      const parts = (doc.name || '').split('/');
-      const docId = parts[parts.length - 1] || '';
-      const fieldsObj = decodeFirestoreFields(doc.fields || {});
-      results.push({
-        id: docId,
-        ...fieldsObj
+    function exportCsv() {
+      const filtered = getFilteredSubmissions();
+      const headers = [
+        "No",
+        "申し込みフォルダ",
+        "氏名",
+        "フリガナ",
+        "学年",
+        "性別",
+        "生年月日",
+        "種目",
+        "住所",
+        "連絡先",
+        "申込日時"
+      ];
+      const rows = filtered.map((item, idx) => {
+        const evName =
+          item.eventName ||
+          state.events.find((e) => e.id === item.eventId)?.name ||
+          item.eventId ||
+          "";
+        return [
+          idx + 1,
+          evName,
+          item.name || "",
+          item.kana || "",
+          item.grade || "",
+          item.gender || "",
+          item.birthDate || "",
+          item.category || "",
+          item.address || "",
+          item.phone || "",
+          formatDateTime(item.createdAt)
+        ]
+          .map(escapeCsv)
+          .join(",");
       });
-    });
 
-    pageToken = data.nextPageToken || null;
-  } while (pageToken);
-
-  return results;
-}
-
-/**
- * Firestore REST API の fields 構造を通常の JS オブジェクトに変換
- */
-function decodeFirestoreFields(fields) {
-  const obj = {};
-  Object.keys(fields).forEach((key) => {
-    obj[key] = decodeFirestoreValue(fields[key]);
-  });
-  return obj;
-}
-
-function decodeFirestoreValue(val) {
-  if (!val || typeof val !== 'object') return null;
-
-  if ('stringValue' in val) return val.stringValue;
-  if ('booleanValue' in val) return val.booleanValue;
-  if ('integerValue' in val) return Number(val.integerValue);
-  if ('doubleValue' in val) return Number(val.doubleValue);
-  if ('nullValue' in val) return null;
-  if ('timestampValue' in val) return val.timestampValue;
-  if ('bytesValue' in val) return val.bytesValue;
-  if ('geoPointValue' in val) return val.geoPointValue;
-  if ('referenceValue' in val) return val.referenceValue;
-
-  if ('arrayValue' in val) {
-    const values = (val.arrayValue && Array.isArray(val.arrayValue.values))
-      ? val.arrayValue.values
-      : [];
-    return values.map((item) => decodeFirestoreValue(item));
-  }
-
-  if ('mapValue' in val) {
-    const mapFields = (val.mapValue && val.mapValue.fields) ? val.mapValue.fields : {};
-    return decodeFirestoreFields(mapFields);
-  }
-
-  return null;
-}
-
-/**
- * 保存先Googleドライブフォルダを取得（ID指定優先、なければ名前で検索または作成）
- */
-function getTargetBackupFolder() {
-  if (BACKUP_DRIVE_FOLDER_ID && BACKUP_DRIVE_FOLDER_ID.trim() !== '') {
-    return DriveApp.getFolderById(BACKUP_DRIVE_FOLDER_ID.trim());
-  }
-
-  const folders = DriveApp.getFoldersByName(BACKUP_DRIVE_FOLDER_NAME);
-  if (folders.hasNext()) {
-    return folders.next();
-  }
-  return DriveApp.createFolder(BACKUP_DRIVE_FOLDER_NAME);
-}
-
-/**
- * JSONファイルをGoogleドライブに保存
- */
-function saveJsonToDrive(folder, fileName, jsonString) {
-  const blob = Utilities.newBlob(jsonString, 'application/json', fileName);
-  return folder.createFile(blob);
-}
-
-/**
- * 指定日数より古いバックアップファイルをゴミ箱へ移動
- */
-function cleanupOldBackups(folder, keepDays) {
-  const thresholdMs = Date.now() - keepDays * 24 * 60 * 60 * 1000;
-  const files = folder.getFiles();
-
-  while (files.hasNext()) {
-    const file = files.next();
-    const createdTime = file.getDateCreated().getTime();
-    if (createdTime < thresholdMs) {
-      file.setTrashed(true);
+      const bom = "\uFEFF";
+      const csvText = bom + [headers.map(escapeCsv).join(","), ...rows].join("\r\n");
+      const blob = new Blob([csvText], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `申込一覧_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("CSVを出力しました", "success");
     }
-  }
-}
 
-/**
- * スプレッドシートに「申込一覧」と「フォルダ一覧」を出力
- */
-function writeToSpreadsheet(events, submissions, stampText) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) {
-    throw new Error('紐づいたスプレッドシートが見つかりません。スプレッドシートの「拡張機能＞Apps Script」から開いてください。');
-  }
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("tabApply").addEventListener("click", () => switchTab("apply"));
+      document.getElementById("tabAdmin").addEventListener("click", () => switchTab("admin"));
 
-  // イベントID -> 名称のマップを作成
-  const eventNameMap = {};
-  events.forEach((ev) => {
-    eventNameMap[ev.id] = ev.name || ev.title || '';
-  });
+      document.getElementById("applyEventSelect").addEventListener("change", (e) => {
+        state.selectedEventId = e.target.value;
+      });
 
-  // 1. 申込一覧シート
-  let subSheet = ss.getSheetByName('申込一覧');
-  if (!subSheet) {
-    subSheet = ss.insertSheet('申込一覧');
-  }
-  subSheet.clearContents();
+      document.getElementById("applyForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const eventId = document.getElementById("applyEventSelect").value;
+        if (!eventId) {
+          showToast("申し込みフォルダを選択してください", "error");
+          return;
+        }
 
-  const sortedSubmissions = submissions.slice().sort((a, b) => {
-    const timeA = toEpochMs(a.createdAt);
-    const timeB = toEpochMs(b.createdAt);
-    return timeB - timeA;
-  });
+        const evObj = state.events.find((x) => x.id === eventId);
+        const submitBtn = document.getElementById("applySubmitBtn");
+        submitBtn.disabled = true;
+        submitBtn.textContent = "送信中...";
 
-  const subRows = [
-    ['最終更新日時', stampText, '', '', '', '', '', '', '', '', '', ''],
-    [
-      'No',
-      '申し込みフォルダ',
-      '氏名',
-      'フリガナ',
-      '学年',
-      '性別',
-      '生年月日',
-      '種目',
-      '住所',
-      '連絡先',
-      '申込日時',
-      'データID'
-    ]
-  ];
+        try {
+          const payload = {
+            eventId: eventId,
+            eventName: evObj?.name || "",
+            name: document.getElementById("inputName").value.trim(),
+            kana: document.getElementById("inputKana").value.trim(),
+            grade: document.getElementById("inputGrade").value.trim(),
+            gender: document.getElementById("inputGender").value,
+            birthDate: document.getElementById("inputBirthDate").value,
+            category: document.getElementById("inputCategory").value.trim(),
+            address: document.getElementById("inputAddress").value.trim(),
+            phone: document.getElementById("inputPhone").value.trim(),
+            createdAt: Date.now()
+          };
 
-  sortedSubmissions.forEach((item, idx) => {
-    const folderLabel =
-      item.eventName ||
-      eventNameMap[item.eventId] ||
-      item.eventId ||
-      '';
+          await addDoc(collection(db, "submissions"), payload);
+          e.target.reset();
+          document.getElementById("applyEventSelect").value = eventId;
+          showToast("申し込みを受け付けました！", "success");
+        } catch (err) {
+          console.error(err);
+          showToast("送信に失敗しました。通信状況をご確認ください。", "error");
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "申し込む";
+        }
+      });
 
-    const createdAtText = formatTimestampJst(item.createdAt);
+      document.getElementById("adminLoginForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const pass = document.getElementById("adminPassInput").value;
+        if (pass === ADMIN_PASSCODE) {
+          state.isAdminAuthenticated = true;
+          document.getElementById("adminPassInput").value = "";
+          renderAdminGate();
+          showToast("管理者モードにログインしました", "success");
+        } else {
+          showToast("パスワードが正しくありません", "error");
+        }
+      });
 
-    subRows.push([
-      idx + 1,
-      folderLabel,
-      item.name || '',
-      item.kana || item.furigana || '',
-      item.grade || '',
-      item.gender || item.sex || '',
-      item.birthDate || item.birthday || '',
-      item.category || item.eventType || item.type || '',
-      item.address || '',
-      item.phone || item.tel || item.contact || '',
-      createdAtText,
-      item.id || ''
-    ]);
-  });
+      document.getElementById("adminLogoutBtn").addEventListener("click", () => {
+        state.isAdminAuthenticated = false;
+        renderAdminGate();
+        showToast("ログアウトしました", "info");
+      });
 
-  subSheet.getRange(1, 1, subRows.length, 12).setValues(subRows);
+      document.getElementById("createEventForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const nameInput = document.getElementById("newEventNameInput");
+        const name = nameInput.value.trim();
+        if (!name) return;
 
-  // 2. フォルダ一覧シート
-  let evSheet = ss.getSheetByName('フォルダ一覧');
-  if (!evSheet) {
-    evSheet = ss.insertSheet('フォルダ一覧');
-  }
-  evSheet.clearContents();
+        try {
+          await addDoc(collection(db, "events"), {
+            name: name,
+            createdAt: Date.now()
+          });
+          nameInput.value = "";
+          showToast(`フォルダ「${name}」を作成しました`, "success");
+        } catch (err) {
+          console.error(err);
+          showToast("フォルダ作成に失敗しました", "error");
+        }
+      });
 
-  const evRows = [
-    ['最終更新日時', stampText, '', ''],
-    ['No', '申し込み名称', 'フォルダID', '作成日時']
-  ];
+      document.getElementById("adminEventFilter").addEventListener("change", (e) => {
+        state.adminEventId = e.target.value;
+        renderSubmissionsTable();
+      });
 
-  events.forEach((ev, idx) => {
-    evRows.push([
-      idx + 1,
-      ev.name || ev.title || '',
-      ev.id || '',
-      formatTimestampJst(ev.createdAt)
-    ]);
-  });
+      document.getElementById("adminSearchInput").addEventListener("input", () => {
+        renderSubmissionsTable();
+      });
 
-  evSheet.getRange(1, 1, evRows.length, 4).setValues(evRows);
-}
+      document.getElementById("exportJsonBtn").addEventListener("click", exportJsonBackup);
+      document.getElementById("exportCsvBtn").addEventListener("click", exportCsv);
 
-function toEpochMs(val) {
-  if (!val) return 0;
-  if (typeof val === 'number') return val;
-  const parsed = Date.parse(val);
-  return isNaN(parsed) ? 0 : parsed;
-}
+      const restoreInput = document.getElementById("restoreJsonInput");
+      document.getElementById("restoreJsonBtn").addEventListener("click", () => {
+        restoreInput.value = "";
+        restoreInput.click();
+      });
 
-function formatTimestampJst(val) {
-  const ms = toEpochMs(val);
-  if (!ms) return '';
-  return Utilities.formatDate(new Date(ms), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
-}
+      restoreInput.addEventListener("change", async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          await restoreJsonBackup(file);
+        } catch (err) {
+          console.error(err);
+          showToast(`復元に失敗しました: ${err.message || err}`, "error");
+        }
+      });
+
+      // Firestore リアルタイム購読
+      onSnapshot(
+        query(collection(db, "events"), orderBy("createdAt", "desc")),
+        (snap) => {
+          state.events = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          renderEventOptions();
+          if (state.isAdminAuthenticated) {
+            renderAdminEventsList();
+            renderSubmissionsTable();
+          }
+        },
+        (err) => {
+          console.error("events購読エラー:", err);
+          showToast("フォルダデータの読み込みに問題があります", "error");
+        }
+      );
+
+      onSnapshot(
+        query(collection(db, "submissions"), orderBy("createdAt", "desc")),
+        (snap) => {
+          state.submissions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          renderEventOptions();
+          if (state.isAdminAuthenticated) {
+            renderAdminEventsList();
+            renderSubmissionsTable();
+          }
+        },
+        (err) => {
+          console.error("submissions購読エラー:", err);
+          showToast("申込データの読み込みに問題があります", "error");
+        }
+      );
+    });
+  </script>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen">
+  <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h1 class="text-lg sm:text-xl font-bold text-slate-900">申し込み管理システム</h1>
+        <p class="text-xs text-slate-500">Firestore 連携 / バックアップ・復元対応</p>
+      </div>
+      <nav class="flex items-center gap-2">
+        <button
+          id="tabApply"
+          type="button"
+          class="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white"
+        >
+          申し込みフォーム
+        </button>
+        <button
+          id="tabAdmin"
+          type="button"
+          class="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
+        >
+          管理画面
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <!-- 申し込みフォーム画面 -->
+    <section id="applySection" class="max-w-2xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-7">
+      <h2 class="text-lg font-bold text-slate-900 mb-1">参加・受講申し込み</h2>
+      <p class="text-xs sm:text-sm text-slate-500 mb-5">該当する申し込みフォルダを選択し、必要事項をご入力ください。</p>
+
+      <form id="applyForm" class="space-y-4">
+        <div>
+          <label class="block text-sm font-semibold text-slate-700 mb-1">申し込みフォルダ *</label>
+          <select
+            id="applyEventSelect"
+            required
+            class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">読み込み中...</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">氏名 *</label>
+            <input
+              id="inputName"
+              type="text"
+              required
+              placeholder="山田 太郎"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">フリガナ *</label>
+            <input
+              id="inputKana"
+              type="text"
+              required
+              placeholder="ヤマダ タロウ"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">学年・所属</label>
+            <input
+              id="inputGrade"
+              type="text"
+              placeholder="例: 小学3年 / 一般"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">性別</label>
+            <select
+              id="inputGender"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">選択してください</option>
+              <option value="男性">男性</option>
+              <option value="女性">女性</option>
+              <option value="その他">その他</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">生年月日</label>
+            <input
+              id="inputBirthDate"
+              type="date"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">種目・区分</label>
+            <input
+              id="inputCategory"
+              type="text"
+              placeholder="例: 形 / 組手 / Aコース"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-slate-700 mb-1">連絡先（電話番号） *</label>
+            <input
+              id="inputPhone"
+              type="tel"
+              required
+              placeholder="090-1234-5678"
+              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-semibold text-slate-700 mb-1">住所 *</label>
+          <input
+            id="inputAddress"
+            type="text"
+            required
+            placeholder="〒000-0000 〇〇県〇〇市..."
+            class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        <div class="pt-2">
+          <button
+            id="applySubmitBtn"
+            type="submit"
+            class="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-sm transition"
+          >
+            申し込む
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 管理画面 -->
+    <section id="adminSection" class="hidden space-y-6">
+      <!-- ログイン画面 -->
+      <div id="adminLockBox" class="max-w-md mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+        <h2 class="text-lg font-bold text-slate-900 mb-1">管理者ログイン</h2>
+        <p class="text-xs text-slate-500 mb-4">管理者パスワードを入力してください。</p>
+        <form id="adminLoginForm" class="space-y-3">
+          <input
+            id="adminPassInput"
+            type="password"
+            required
+            placeholder="パスワード"
+            class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            type="submit"
+            class="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold"
+          >
+            ログイン
+          </button>
+        </form>
+      </div>
+
+      <!-- 管理ダッシュボード -->
+      <div id="adminDashboardBox" class="hidden space-y-6">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-lg font-bold text-slate-900">管理ダッシュボード</h2>
+            <p class="text-xs text-slate-500">申し込みフォルダの作成・一覧確認・JSONバックアップ＆復元・CSV出力</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              id="exportJsonBtn"
+              type="button"
+              class="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              JSONバックアップ保存
+            </button>
+            <button
+              id="restoreJsonBtn"
+              type="button"
+              class="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              JSONから復元
+            </button>
+            <input id="restoreJsonInput" type="file" accept=".json,application/json" class="hidden" />
+            <button
+              id="exportCsvBtn"
+              type="button"
+              class="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              CSV出力
+            </button>
+            <button
+              id="adminLogoutBtn"
+              type="button"
+              class="px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700"
+            >
+              ログアウト
+            </button>
+          </div>
+        </div>
+
+        <!-- 申し込みフォルダ管理 -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
+          <h3 class="text-base font-bold text-slate-900">申し込みフォルダ管理</h3>
+          <form id="createEventForm" class="flex flex-col sm:flex-row gap-2.5">
+            <input
+              id="newEventNameInput"
+              type="text"
+              required
+              placeholder="新しい申し込みフォルダ名（例: 春季大会 申込）"
+              class="flex-1 rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="submit"
+              class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold whitespace-nowrap"
+            >
+              フォルダ作成
+            </button>
+          </form>
+          <div id="adminEventsList" class="space-y-2"></div>
+        </div>
+
+        <!-- 申込一覧 -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <h3 class="text-base font-bold text-slate-900">申し込み一覧</h3>
+              <span id="filteredCountLabel" class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-medium">0件表示</span>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <select
+                id="adminEventFilter"
+                class="rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="ALL">すべてのフォルダ</option>
+              </select>
+              <input
+                id="adminSearchInput"
+                type="search"
+                placeholder="氏名・住所・連絡先などで検索"
+                class="rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+
+          <div class="overflow-x-auto border border-slate-200 rounded-xl">
+            <table class="w-full text-left border-collapse">
+              <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                <tr>
+                  <th class="px-3 py-2.5 whitespace-nowrap">No</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">申し込みフォルダ</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">氏名</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">フリガナ</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">学年</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">性別</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">生年月日</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">種目</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">住所</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">連絡先</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">申込日時</th>
+                  <th class="px-3 py-2.5 whitespace-nowrap">操作</th>
+                </tr>
+              </thead>
+              <tbody id="submissionsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

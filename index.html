@@ -164,7 +164,8 @@
                 <option value="高1">高1</option>
                 <option value="高2">高2</option>
                 <option value="高3">高3</option>
-                <option value="一般">一般（大学・社会人）</option>
+                <option value="大学">大学</option>
+                <option value="一般">一般</option>
               </select>
             </div>
 
@@ -319,11 +320,11 @@
           <div class="flex items-start gap-3">
             <i data-lucide="database" class="w-6 h-6 text-amber-600 shrink-0 mt-0.5"></i>
             <div class="text-sm space-y-1.5">
-              <p class="font-bold text-base">Firebase Firestore の初期設定を確認してください</p>
+              <p class="font-bold text-base">Firestoreデータベースの初期設定またはルール確認が必要です</p>
               <p id="firebase-error-detail" class="text-amber-800">データベースへの接続に失敗しました。</p>
               <ol class="list-decimal list-inside text-xs space-y-1 text-amber-800 pt-1">
-                <li>Firebaseコンソールで <strong>「Firestore Database」→「データベースの作成」</strong> をクリックします。</li>
-                <li>セキュリティルール（ルールタブ）をテストモード、または読み書き許可に設定して公開してください。</li>
+                <li>Firebaseコンソールで <strong>「構築」＞「Firestore Database」＞「データベースの作成」</strong> をクリックします。</li>
+                <li>セキュリティルール（ルールタブ）をテストモード、または <code>allow read, write: if true;</code> に設定して公開してください。</li>
               </ol>
             </div>
           </div>
@@ -668,8 +669,7 @@
 
     // =========================================================================
     // 2. 定数・グローバル状態管理
-    // =========================================================================
-    // 学年順ソート用の優先順位マップ（小1、小2、中1、高1の形式に対応）
+    // 学年順ソート用の優先順位マップ（年少〜一般の形式に対応）
     const GRADE_ORDER = {
       "年少": 1,
       "年中": 2,
@@ -686,7 +686,8 @@
       "高1": 13,
       "高2": 14,
       "高3": 15,
-      "一般": 16
+      "大学": 16,
+      "一般": 17
     };
 
     const state = {
@@ -899,46 +900,54 @@
     // =========================================================================
     // 6. 【管理者側】パスワード認証・フォルダ管理・抽出・出力処理
     // =========================================================================
-    async function initAdminMode() {
-      // Firestoreから管理者パスワード設定を同期（存在すれば）
-      try {
-        const configSnap = await getDoc(doc(db, "settings", "admin"));
-        if (configSnap.exists() && configSnap.data().password) {
-          state.adminPassword = configSnap.data().password;
-          localStorage.setItem("admin_pass_cache", state.adminPassword);
-        }
-      } catch (e) {
-        // 初回未設定時はデフォルト "1234" を使用
+    function initAdminMode() {
+      // 1. 先にログインフォーム・ボタンのイベントを即時登録（通信待ちでブロックしない）
+      const loginForm = document.getElementById("admin-login-form");
+      if (loginForm) {
+        loginForm.addEventListener("submit", (e) => {
+          e.preventDefault();
+          const inputEl = document.getElementById("admin-password-input");
+          const inputVal = inputEl ? inputEl.value.trim() : "";
+          if (inputVal === state.adminPassword) {
+            sessionStorage.setItem("admin_authenticated", "true");
+            if (inputEl) inputEl.value = "";
+            unlockAdminDashboard();
+            showToast("ログインしました", "success");
+          } else {
+            showToast("パスワードが正しくありません", "error");
+          }
+        });
       }
 
-      // すでにセッション認証済みか確認
+      // ロック（ログアウト）ボタン
+      const logoutBtn = document.getElementById("admin-logout-btn");
+      if (logoutBtn) {
+        logoutBtn.addEventListener("click", () => {
+          sessionStorage.removeItem("admin_authenticated");
+          document.getElementById("admin-dashboard").classList.add("hidden");
+          document.getElementById("admin-login-screen").classList.remove("hidden");
+          showToast("管理画面をロックしました");
+        });
+      }
+
+      setupAdminEventListeners();
+
+      // 2. すでにセッション認証済みか確認
       if (sessionStorage.getItem("admin_authenticated") === "true") {
         unlockAdminDashboard();
       }
 
-      // ログインフォーム送信
-      document.getElementById("admin-login-form").addEventListener("submit", (e) => {
-        e.preventDefault();
-        const inputVal = document.getElementById("admin-password-input").value;
-        if (inputVal === state.adminPassword) {
-          sessionStorage.setItem("admin_authenticated", "true");
-          document.getElementById("admin-password-input").value = "";
-          unlockAdminDashboard();
-          showToast("ログインしました", "success");
-        } else {
-          showToast("パスワードが正しくありません", "error");
-        }
-      });
-
-      // ロック（ログアウト）ボタン
-      document.getElementById("admin-logout-btn").addEventListener("click", () => {
-        sessionStorage.removeItem("admin_authenticated");
-        document.getElementById("admin-dashboard").classList.add("hidden");
-        document.getElementById("admin-login-screen").classList.remove("hidden");
-        showToast("管理画面をロックしました");
-      });
-
-      setupAdminEventListeners();
+      // 3. Firestoreからのパスワード設定同期はバックグラウンドで非同期実行（画面遷移を絶対に止めない）
+      getDoc(doc(db, "settings", "admin"))
+        .then((configSnap) => {
+          if (configSnap.exists() && configSnap.data().password) {
+            state.adminPassword = String(configSnap.data().password);
+            localStorage.setItem("admin_pass_cache", state.adminPassword);
+          }
+        })
+        .catch((err) => {
+          console.warn("Firestoreパスワード同期スキップ（初期値1234またはローカルキャッシュを使用）:", err);
+        });
     }
 
     function unlockAdminDashboard() {

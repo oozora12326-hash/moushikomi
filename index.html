@@ -245,204 +245,216 @@
     }
 
     function renderApplicantFormView() {
-      const folder = state.events.find((e) => e.id === urlEventId);
-      const titleEl = document.getElementById("applicantTournamentTitle");
-      const dateEl = document.getElementById("applicantTournamentDate");
-      const fieldsContainer = document.getElementById("applicantDynamicFields");
-      const submitBtn = document.getElementById("applicantSubmitBtn");
+      try {
+        const folder = state.events.find((e) => e.id === urlEventId);
+        const titleEl = document.getElementById("applicantTournamentTitle");
+        const dateEl = document.getElementById("applicantTournamentDate");
+        const fieldsContainer = document.getElementById("applicantDynamicFields");
+        const submitBtn = document.getElementById("applicantSubmitBtn");
 
-      if (!urlEventId) {
-        if (titleEl) titleEl.textContent = "専用URLが指定されていません";
-        if (dateEl) dateEl.textContent = "各大会フォルダから発行されたURLまたはQRコードを開いてください。";
-        if (fieldsContainer) fieldsContainer.innerHTML = "";
-        if (submitBtn) submitBtn.disabled = true;
-        return;
-      }
+        if (!urlEventId) {
+          if (titleEl) titleEl.textContent = "専用URLが指定されていません";
+          if (dateEl) dateEl.textContent = "各大会フォルダから発行されたURLまたはQRコードを開いてください。";
+          if (fieldsContainer) fieldsContainer.innerHTML = "";
+          if (submitBtn) submitBtn.disabled = true;
+          return;
+        }
 
-      if (!folder) {
-        if (titleEl) titleEl.textContent = "読み込み中...";
-        if (dateEl) dateEl.textContent = "";
-        return;
-      }
+        if (!folder) {
+          if (titleEl) titleEl.textContent = "読み込み中...";
+          if (dateEl) dateEl.textContent = "";
+          return;
+        }
 
-      if (titleEl) titleEl.textContent = folder.name || "申し込みフォーム";
-      if (dateEl) dateEl.textContent = `日にち：${formatEventDate(folder.eventDate)}`;
-      if (submitBtn) submitBtn.disabled = false;
+        if (titleEl) titleEl.textContent = folder.name || "申し込みフォーム";
+        if (dateEl) dateEl.textContent = `日にち：${formatEventDate(folder.eventDate)}`;
+        if (submitBtn) submitBtn.disabled = false;
 
-      const enabledKeys = getFolderFields(folder);
-      if (fieldsContainer && fieldsContainer.dataset.renderedFor !== `${folder.id}:${enabledKeys.join(",")}`) {
-        fieldsContainer.innerHTML = buildDynamicFieldInputsHtml(enabledKeys, "appf");
-        fieldsContainer.dataset.renderedFor = `${folder.id}:${enabledKeys.join(",")}`;
+        const enabledKeys = getFolderFields(folder);
+        if (fieldsContainer && fieldsContainer.dataset.renderedFor !== `${folder.id}:${enabledKeys.join(",")}`) {
+          fieldsContainer.innerHTML = buildDynamicFieldInputsHtml(enabledKeys, "appf");
+          fieldsContainer.dataset.renderedFor = `${folder.id}:${enabledKeys.join(",")}`;
+        }
+      } catch (err) {
+        console.error("参加者フォーム描画エラー:", err);
       }
     }
 
     function renderFoldersView() {
-      const listEl = document.getElementById("foldersListBox");
-      const countBadge = document.getElementById("folderCountBadge");
-      if (!listEl) return;
+      try {
+        const listEl = document.getElementById("foldersListBox");
+        const countBadge = document.getElementById("folderCountBadge");
+        if (!listEl) return;
 
-      if (countBadge) {
-        countBadge.textContent = `${state.events.length}件`;
-      }
+        if (countBadge) {
+          countBadge.textContent = `${state.events.length}件`;
+        }
 
-      if (state.events.length === 0) {
-        listEl.innerHTML = `<p class="text-sm text-slate-500 py-3">まだフォルダがありません。「フォルダ新規作成」から大会名・日にち・入力項目を選んで作成してください。</p>`;
-        return;
-      }
+        if (state.events.length === 0) {
+          listEl.innerHTML = `<p class="text-sm text-slate-500 py-3">まだフォルダがありません。「フォルダ新規作成」から大会名・日にち・入力項目を選んで作成してください。</p>`;
+          return;
+        }
 
-      listEl.innerHTML = state.events
-        .map((ev) => {
-          const count = state.submissions.filter((s) => s.eventId === ev.id).length;
-          const title = ev.name || "(名称未設定)";
-          const dateLabel = formatEventDate(ev.eventDate);
-          const fieldsLabel = getFolderFields(ev).map(getFieldLabel).join(" / ");
-          return `
-            <div class="p-3.5 rounded-xl bg-sky-50 border border-sky-200 hover:bg-sky-100/75 hover:border-sky-300 transition space-y-2">
-              <div class="flex items-start justify-between gap-2">
-                <button
-                  type="button"
-                  data-open-folder="${escapeHtml(ev.id)}"
-                  class="flex-1 text-left space-y-0.5"
-                >
-                  <div class="font-bold text-sm sm:text-base text-slate-900">${escapeHtml(title)}</div>
-                  <div class="text-xs font-semibold text-sky-800">日にち：${escapeHtml(dateLabel)}</div>
-                  <div class="text-[11px] text-slate-600">入力項目：${escapeHtml(fieldsLabel)}</div>
-                </button>
-                <div class="flex items-center gap-1.5">
-                  <span class="text-xs px-2.5 py-1 rounded-full bg-white/90 border border-sky-200 text-sky-900 font-semibold whitespace-nowrap">
-                    ${count}件
-                  </span>
+        listEl.innerHTML = state.events
+          .map((ev) => {
+            const count = state.submissions.filter((s) => s.eventId === ev.id).length;
+            const title = ev.name || "(名称未設定)";
+            const dateLabel = formatEventDate(ev.eventDate);
+            const fieldsLabel = getFolderFields(ev).map(getFieldLabel).join(" / ");
+            return `
+              <div class="p-3.5 rounded-xl bg-sky-50 border border-sky-200 hover:bg-sky-100/75 hover:border-sky-300 transition space-y-2">
+                <div class="flex items-start justify-between gap-2">
                   <button
                     type="button"
-                    data-delete-folder="${escapeHtml(ev.id)}"
-                    class="px-2.5 py-1 text-xs font-medium text-red-600 bg-white/80 hover:bg-red-50 rounded-lg border border-red-200"
+                    data-open-folder="${escapeHtml(ev.id)}"
+                    class="flex-1 text-left space-y-0.5"
                   >
-                    削除
+                    <div class="font-bold text-sm sm:text-base text-slate-900">${escapeHtml(title)}</div>
+                    <div class="text-xs font-semibold text-sky-800">日にち：${escapeHtml(dateLabel)}</div>
+                    <div class="text-[11px] text-slate-600">入力項目：${escapeHtml(fieldsLabel)}</div>
+                  </button>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs px-2.5 py-1 rounded-full bg-white/90 border border-sky-200 text-sky-900 font-semibold whitespace-nowrap">
+                      ${count}件
+                    </span>
+                    <button
+                      type="button"
+                      data-delete-folder="${escapeHtml(ev.id)}"
+                      class="px-2.5 py-1 text-xs font-medium text-red-600 bg-white/80 hover:bg-red-50 rounded-lg border border-red-200"
+                    >
+                      削除
+                    </button>
+                  </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 pt-1 border-t border-sky-200/70">
+                  <button
+                    type="button"
+                    data-open-folder="${escapeHtml(ev.id)}"
+                    class="px-2.5 py-1 rounded-lg bg-white hover:bg-sky-50 text-sky-900 border border-sky-300 text-xs font-semibold"
+                  >
+                    申込者一覧
+                  </button>
+                  <button
+                    type="button"
+                    data-open-formcheck="${escapeHtml(ev.id)}"
+                    class="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
+                  >
+                    このフォルダのQR・URL・フォーム
                   </button>
                 </div>
               </div>
-              <div class="flex flex-wrap items-center gap-2 pt-1 border-t border-sky-200/70">
-                <button
-                  type="button"
-                  data-open-folder="${escapeHtml(ev.id)}"
-                  class="px-2.5 py-1 rounded-lg bg-white hover:bg-sky-50 text-sky-900 border border-sky-300 text-xs font-semibold"
-                >
-                  申込者一覧
-                </button>
-                <button
-                  type="button"
-                  data-open-formcheck="${escapeHtml(ev.id)}"
-                  class="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
-                >
-                  このフォルダのQR・URL・フォーム
-                </button>
-              </div>
-            </div>
-          `;
-        })
-        .join("");
-
-      listEl.querySelectorAll("[data-open-folder]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          state.selectedFolderId = btn.getAttribute("data-open-folder");
-          state.selectedGrades.clear();
-          state.selectedGenders.clear();
-          state.selectedCategories.clear();
-          switchView("list");
-        });
-      });
-
-      listEl.querySelectorAll("[data-open-formcheck]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          state.selectedFolderId = btn.getAttribute("data-open-formcheck");
-          switchView("formCheck");
-        });
-      });
-
-      listEl.querySelectorAll("[data-delete-folder]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const id = btn.getAttribute("data-delete-folder");
-          const ev = state.events.find((x) => x.id === id);
-          if (!confirm(`「${ev?.name || id}」を削除しますか？`)) return;
-          try {
-            await deleteDoc(doc(db, "events", id));
-            if (state.selectedFolderId === id) state.selectedFolderId = "";
-            showToast("フォルダを削除しました", "success");
-          } catch (err) {
-            console.error(err);
-            showToast("削除に失敗しました", "error");
-          }
-        });
-      });
-    }
-
-    function renderCheckGroups() {
-      const gradeEl = document.getElementById("gradeChecks");
-      const genderEl = document.getElementById("genderChecks");
-      const categoryEl = document.getElementById("categoryChecks");
-      if (!gradeEl || !genderEl || !categoryEl) return;
-
-      const items = getFolderItems();
-      const grades = Array.from(new Set(items.map((x) => (x.grade || "").trim()).filter(Boolean)));
-      const genders = Array.from(
-        new Set([...GENDER_OPTIONS, ...items.map((x) => (x.gender || "").trim()).filter(Boolean)])
-      );
-      const categories = Array.from(
-        new Set([...CATEGORY_OPTIONS, ...items.map((x) => (x.category || "").trim()).filter(Boolean)])
-      );
-
-      Array.from(state.selectedGrades).forEach((v) => {
-        if (!grades.includes(v)) state.selectedGrades.delete(v);
-      });
-      Array.from(state.selectedGenders).forEach((v) => {
-        if (!genders.includes(v)) state.selectedGenders.delete(v);
-      });
-      Array.from(state.selectedCategories).forEach((v) => {
-        if (!categories.includes(v)) state.selectedCategories.delete(v);
-      });
-
-      const buildChips = (list, setObj, attrName, emptyText) => {
-        if (list.length === 0) return `<span class="text-xs text-slate-400">${emptyText}</span>`;
-        return list
-          .map((val) => {
-            const checked = setObj.has(val) ? "checked" : "";
-            return `
-              <label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer">
-                <input type="checkbox" ${attrName}="${escapeHtml(val)}" ${checked} class="rounded border-slate-300 text-blue-600" />
-                <span>${escapeHtml(val)}</span>
-              </label>
             `;
           })
           .join("");
-      };
 
-      gradeEl.innerHTML = buildChips(grades, state.selectedGrades, "data-chk-grade", "該当データなし");
-      genderEl.innerHTML = buildChips(genders, state.selectedGenders, "data-chk-gender", "該当データなし");
-      categoryEl.innerHTML = buildChips(categories, state.selectedCategories, "data-chk-category", "該当データなし");
-
-      gradeEl.querySelectorAll("[data-chk-grade]").forEach((el) => {
-        el.addEventListener("change", () => {
-          const v = el.getAttribute("data-chk-grade");
-          el.checked ? state.selectedGrades.add(v) : state.selectedGrades.delete(v);
-          renderListRows();
+        listEl.querySelectorAll("[data-open-folder]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.selectedFolderId = btn.getAttribute("data-open-folder");
+            state.selectedGrades.clear();
+            state.selectedGenders.clear();
+            state.selectedCategories.clear();
+            switchView("list");
+          });
         });
-      });
 
-      genderEl.querySelectorAll("[data-chk-gender]").forEach((el) => {
-        el.addEventListener("change", () => {
-          const v = el.getAttribute("data-chk-gender");
-          el.checked ? state.selectedGenders.add(v) : state.selectedGenders.delete(v);
-          renderListRows();
+        listEl.querySelectorAll("[data-open-formcheck]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.selectedFolderId = btn.getAttribute("data-open-formcheck");
+            switchView("formCheck");
+          });
         });
-      });
 
-      categoryEl.querySelectorAll("[data-chk-category]").forEach((el) => {
-        el.addEventListener("change", () => {
-          const v = el.getAttribute("data-chk-category");
-          el.checked ? state.selectedCategories.add(v) : state.selectedCategories.delete(v);
-          renderListRows();
+        listEl.querySelectorAll("[data-delete-folder]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-delete-folder");
+            const ev = state.events.find((x) => x.id === id);
+            if (!confirm(`「${ev?.name || id}」を削除しますか？`)) return;
+            try {
+              await deleteDoc(doc(db, "events", id));
+              if (state.selectedFolderId === id) state.selectedFolderId = "";
+              showToast("フォルダを削除しました", "success");
+            } catch (err) {
+              console.error(err);
+              showToast("削除に失敗しました", "error");
+            }
+          });
         });
-      });
+      } catch (err) {
+        console.error("フォルダ一覧描画エラー:", err);
+      }
+    }
+
+    function renderCheckGroups() {
+      try {
+        const gradeEl = document.getElementById("gradeChecks");
+        const genderEl = document.getElementById("genderChecks");
+        const categoryEl = document.getElementById("categoryChecks");
+        if (!gradeEl || !genderEl || !categoryEl) return;
+
+        const items = getFolderItems();
+        const grades = Array.from(new Set(items.map((x) => (x.grade || "").trim()).filter(Boolean)));
+        const genders = Array.from(
+          new Set([...GENDER_OPTIONS, ...items.map((x) => (x.gender || "").trim()).filter(Boolean)])
+        );
+        const categories = Array.from(
+          new Set([...CATEGORY_OPTIONS, ...items.map((x) => (x.category || "").trim()).filter(Boolean)])
+        );
+
+        Array.from(state.selectedGrades).forEach((v) => {
+          if (!grades.includes(v)) state.selectedGrades.delete(v);
+        });
+        Array.from(state.selectedGenders).forEach((v) => {
+          if (!genders.includes(v)) state.selectedGenders.delete(v);
+        });
+        Array.from(state.selectedCategories).forEach((v) => {
+          if (!categories.includes(v)) state.selectedCategories.delete(v);
+        });
+
+        const buildChips = (list, setObj, attrName, emptyText) => {
+          if (list.length === 0) return `<span class="text-xs text-slate-400">${emptyText}</span>`;
+          return list
+            .map((val) => {
+              const checked = setObj.has(val) ? "checked" : "";
+              return `
+                <label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer">
+                  <input type="checkbox" ${attrName}="${escapeHtml(val)}" ${checked} class="rounded border-slate-300 text-blue-600" />
+                  <span>${escapeHtml(val)}</span>
+                </label>
+              `;
+            })
+            .join("");
+        };
+
+        gradeEl.innerHTML = buildChips(grades, state.selectedGrades, "data-chk-grade", "該当データなし");
+        genderEl.innerHTML = buildChips(genders, state.selectedGenders, "data-chk-gender", "該当データなし");
+        categoryEl.innerHTML = buildChips(categories, state.selectedCategories, "data-chk-category", "該当データなし");
+
+        gradeEl.querySelectorAll("[data-chk-grade]").forEach((el) => {
+          el.addEventListener("change", () => {
+            const v = el.getAttribute("data-chk-grade");
+            el.checked ? state.selectedGrades.add(v) : state.selectedGrades.delete(v);
+            renderListRows();
+          });
+        });
+
+        genderEl.querySelectorAll("[data-chk-gender]").forEach((el) => {
+          el.addEventListener("change", () => {
+            const v = el.getAttribute("data-chk-gender");
+            el.checked ? state.selectedGenders.add(v) : state.selectedGenders.delete(v);
+            renderListRows();
+          });
+        });
+
+        categoryEl.querySelectorAll("[data-chk-category]").forEach((el) => {
+          el.addEventListener("change", () => {
+            const v = el.getAttribute("data-chk-category");
+            el.checked ? state.selectedCategories.add(v) : state.selectedCategories.delete(v);
+            renderListRows();
+          });
+        });
+      } catch (err) {
+        console.error("条件チェック描画エラー:", err);
+      }
     }
 
     function getFilteredAndSortedItems() {
@@ -473,130 +485,138 @@
     }
 
     function renderListRows() {
-      const folder = state.events.find((e) => e.id === state.selectedFolderId);
-      const titleEl = document.getElementById("listFolderName");
-      const dateEl = document.getElementById("listFolderDate");
-      const countEl = document.getElementById("listCountBadge");
-      const tbody = document.getElementById("listTableBody");
+      try {
+        const folder = state.events.find((e) => e.id === state.selectedFolderId);
+        const titleEl = document.getElementById("listFolderName");
+        const dateEl = document.getElementById("listFolderDate");
+        const countEl = document.getElementById("listCountBadge");
+        const tbody = document.getElementById("listTableBody");
 
-      if (titleEl) titleEl.textContent = folder ? folder.name : "フォルダ未選択";
-      if (dateEl) dateEl.textContent = folder ? `日にち：${formatEventDate(folder.eventDate)}` : "";
+        if (titleEl) titleEl.textContent = folder ? folder.name : "フォルダ未選択";
+        if (dateEl) dateEl.textContent = folder ? `日にち：${formatEventDate(folder.eventDate)}` : "";
 
-      const rows = getFilteredAndSortedItems();
-      if (countEl) countEl.textContent = `${rows.length}件`;
+        const rows = getFilteredAndSortedItems();
+        if (countEl) countEl.textContent = `${rows.length}件`;
 
-      if (!tbody) return;
-      if (rows.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="10" class="px-3 py-6 text-center text-xs sm:text-sm text-slate-500">
-              条件に該当する申込データがありません。
-            </td>
-          </tr>
-        `;
-        return;
-      }
+        if (!tbody) return;
+        if (rows.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="10" class="px-3 py-6 text-center text-xs sm:text-sm text-slate-500">
+                条件に該当する申込データがありません。
+              </td>
+            </tr>
+          `;
+          return;
+        }
 
-      tbody.innerHTML = rows
-        .map((item, i) => `
-          <tr class="border-b border-slate-100 hover:bg-slate-50 text-xs sm:text-sm">
-            <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${i + 1}</td>
-            <td class="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(item.name || "")}</td>
-            <td class="px-3 py-2 text-slate-600 whitespace-nowrap">${escapeHtml(item.kana || "")}</td>
-            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.grade || "")}</td>
-            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.gender || "")}</td>
-            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.category || "")}</td>
-            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.phone || "")}</td>
-            <td class="px-3 py-2 text-slate-700 min-w-[160px]">${escapeHtml(item.address || "")}</td>
-            <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
-            <td class="px-3 py-2 whitespace-nowrap">
-              <button
-                type="button"
-                data-del-item="${escapeHtml(item.id)}"
-                class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200"
-              >
-                削除
-              </button>
-            </td>
-          </tr>
-        `)
-        .join("");
+        tbody.innerHTML = rows
+          .map((item, i) => `
+            <tr class="border-b border-slate-100 hover:bg-slate-50 text-xs sm:text-sm">
+              <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${i + 1}</td>
+              <td class="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(item.name || "")}</td>
+              <td class="px-3 py-2 text-slate-600 whitespace-nowrap">${escapeHtml(item.kana || "")}</td>
+              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.grade || "")}</td>
+              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.gender || "")}</td>
+              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.category || "")}</td>
+              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.phone || "")}</td>
+              <td class="px-3 py-2 text-slate-700 min-w-[160px]">${escapeHtml(item.address || "")}</td>
+              <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
+              <td class="px-3 py-2 whitespace-nowrap">
+                <button
+                  type="button"
+                  data-del-item="${escapeHtml(item.id)}"
+                  class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200"
+                >
+                  削除
+                </button>
+              </td>
+            </tr>
+          `)
+          .join("");
 
-      tbody.querySelectorAll("[data-del-item]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const id = btn.getAttribute("data-del-item");
-          if (!confirm("この申込データを削除しますか？")) return;
-          try {
-            await deleteDoc(doc(db, "submissions", id));
-            showToast("削除しました", "success");
-          } catch (err) {
-            console.error(err);
-            showToast("削除に失敗しました", "error");
-          }
+        tbody.querySelectorAll("[data-del-item]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-del-item");
+            if (!confirm("この申込データを削除しますか？")) return;
+            try {
+              await deleteDoc(doc(db, "submissions", id));
+              showToast("削除しました", "success");
+            } catch (err) {
+              console.error(err);
+              showToast("削除に失敗しました", "error");
+            }
+          });
         });
-      });
+      } catch (err) {
+        console.error("一覧行描画エラー:", err);
+      }
     }
 
     function renderFormCheckView() {
-      const selectEl = document.getElementById("formCheckFolderSelect");
-      if (selectEl) {
-        selectEl.innerHTML =
-          state.events.length === 0
-            ? `<option value="">フォルダがありません</option>`
-            : state.events
-                .map((ev) => {
-                  const sel = ev.id === state.selectedFolderId ? "selected" : "";
-                  return `<option value="${escapeHtml(ev.id)}" ${sel}>${escapeHtml(ev.name)}（${escapeHtml(formatEventDate(ev.eventDate))}）</option>`;
-                })
-                .join("");
-      }
+      try {
+        const selectEl = document.getElementById("formCheckFolderSelect");
+        if (selectEl) {
+          selectEl.innerHTML =
+            state.events.length === 0
+              ? `<option value="">フォルダがありません</option>`
+              : state.events
+                  .map((ev) => {
+                    const sel = ev.id === state.selectedFolderId ? "selected" : "";
+                    return `<option value="${escapeHtml(ev.id)}" ${sel}>${escapeHtml(ev.name)}（${escapeHtml(formatEventDate(ev.eventDate))}）</option>`;
+                  })
+                  .join("");
+        }
 
-      const folder = state.events.find((e) => e.id === state.selectedFolderId);
-      const label = document.getElementById("formCheckFolderBadge");
-      const urlInput = document.getElementById("formCheckUrlInput");
-      const qrBox = document.getElementById("formCheckQrBox");
-      const manualFieldsBox = document.getElementById("manualDynamicFields");
-      const manualSubmitBtn = document.getElementById("manualSubmitBtn");
+        const folder = state.events.find((e) => e.id === state.selectedFolderId);
+        const label = document.getElementById("formCheckFolderBadge");
+        const urlInput = document.getElementById("formCheckUrlInput");
+        const qrBox = document.getElementById("formCheckQrBox");
+        const manualFieldsBox = document.getElementById("manualDynamicFields");
+        const manualSubmitBtn = document.getElementById("manualSubmitBtn");
 
-      if (label) {
-        label.textContent = folder
-          ? `対象：${folder.name}（${formatEventDate(folder.eventDate)}）`
-          : "対象フォルダ：未選択";
-      }
+        if (label) {
+          label.textContent = folder
+            ? `対象：${folder.name}（${formatEventDate(folder.eventDate)}）`
+            : "対象フォルダ：未選択";
+        }
 
-      const url = getFolderUrl(state.selectedFolderId);
-      if (urlInput) urlInput.value = url;
+        const url = getFolderUrl(state.selectedFolderId);
+        if (urlInput) urlInput.value = url;
 
-      if (qrBox) {
-        qrBox.innerHTML = "";
-        if (state.selectedFolderId && typeof QRCode !== "undefined") {
-          try {
-            new QRCode(qrBox, {
-              text: url,
-              width: 164,
-              height: 164,
-              correctLevel: QRCode.CorrectLevel.M
-            });
-          } catch (e) {
-            console.error("QR生成エラー:", e);
+        if (qrBox) {
+          qrBox.innerHTML = "";
+          if (state.selectedFolderId && typeof QRCode !== "undefined") {
+            try {
+              new QRCode(qrBox, {
+                text: url,
+                width: 164,
+                height: 164,
+                correctLevel: QRCode.CorrectLevel.M
+              });
+            } catch (e) {
+              console.error("QR生成エラー:", e);
+            }
           }
         }
-      }
 
-      if (!folder) {
-        if (manualFieldsBox) {
-          manualFieldsBox.innerHTML = `<p class="text-xs text-slate-500">対象フォルダを選択してください。</p>`;
-          manualFieldsBox.dataset.renderedFor = "";
+        if (!folder) {
+          if (manualFieldsBox) {
+            manualFieldsBox.innerHTML = `<p class="text-xs text-slate-500">対象フォルダを選択してください。</p>`;
+            manualFieldsBox.dataset.renderedFor = "";
+          }
+          if (manualSubmitBtn) manualSubmitBtn.disabled = true;
+          return;
         }
-        if (manualSubmitBtn) manualSubmitBtn.disabled = true;
-        return;
-      }
 
-      if (manualSubmitBtn) manualSubmitBtn.disabled = false;
-      const enabledKeys = getFolderFields(folder);
-      if (manualFieldsBox && manualFieldsBox.dataset.renderedFor !== `${folder.id}:${enabledKeys.join(",")}`) {
-        manualFieldsBox.innerHTML = buildDynamicFieldInputsHtml(enabledKeys, "manf");
-        manualFieldsBox.dataset.renderedFor = `${folder.id}:${enabledKeys.join(",")}`;
+        if (manualSubmitBtn) manualSubmitBtn.disabled = false;
+        const enabledKeys = getFolderFields(folder);
+        if (manualFieldsBox && manualFieldsBox.dataset.renderedFor !== `${folder.id}:${enabledKeys.join(",")}`) {
+          manualFieldsBox.innerHTML = buildDynamicFieldInputsHtml(enabledKeys, "manf");
+          manualFieldsBox.dataset.renderedFor = `${folder.id}:${enabledKeys.join(",")}`;
+        }
+      } catch (err) {
+        console.error("フォーム確認描画エラー:", err);
       }
     }
 

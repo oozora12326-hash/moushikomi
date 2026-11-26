@@ -52,6 +52,7 @@
       isAuthenticated: false,
       activeView: "folders", // "folders" | "list" | "formCheck"
       selectedFolderId: "",
+      isCreateFolderOpen: false,
       isFilterPanelOpen: false,
       sortBy: "createdAt_desc",
       selectedGrades: new Set(),
@@ -110,6 +111,11 @@
       return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
+    function formatEventDate(dateStr) {
+      if (!dateStr) return "日程未設定";
+      return String(dateStr).replace(/-/g, "/");
+    }
+
     function populateSelectOptions() {
       const gradeSelect = document.getElementById("mGrade");
       if (gradeSelect) {
@@ -150,22 +156,27 @@
       if (!listEl) return;
 
       if (state.events.length === 0) {
-        listEl.innerHTML = `<p class="text-sm text-slate-500 py-2">まだフォルダがありません。上の入力欄から新しいフォルダを作成してください。</p>`;
+        listEl.innerHTML = `<p class="text-sm text-slate-500 py-2">まだフォルダがありません。「フォルダ新規作成」ボタンから大会名と日にちを入力して作成してください。</p>`;
         return;
       }
 
       listEl.innerHTML = state.events
         .map((ev) => {
           const count = state.submissions.filter((s) => s.eventId === ev.id).length;
+          const title = ev.name || "(名称未設定)";
+          const dateLabel = formatEventDate(ev.eventDate);
           return `
             <div class="flex items-center justify-between gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 transition">
               <button
                 type="button"
                 data-open-folder="${escapeHtml(ev.id)}"
-                class="flex-1 text-left flex items-center justify-between gap-2 py-1"
+                class="flex-1 text-left flex items-center justify-between gap-3 py-1"
               >
-                <span class="font-semibold text-sm text-slate-900">${escapeHtml(ev.name || "")}</span>
-                <span class="text-xs px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-700 font-medium whitespace-nowrap">
+                <div class="space-y-0.5">
+                  <div class="font-bold text-sm sm:text-base text-slate-900">${escapeHtml(title)}</div>
+                  <div class="text-xs font-medium text-blue-700">日にち：${escapeHtml(dateLabel)}</div>
+                </div>
+                <span class="text-xs px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-700 font-semibold whitespace-nowrap">
                   ${count}件
                 </span>
               </button>
@@ -216,7 +227,6 @@
 
       const items = getFolderItems();
       const grades = Array.from(new Set(items.map((x) => (x.grade || "").trim()).filter(Boolean)));
-      // 性別は「男性」「女性」を常に表示（データに存在しない値があっても含める）
       const genders = Array.from(
         new Set([...GENDER_OPTIONS, ...items.map((x) => (x.gender || "").trim()).filter(Boolean)])
       );
@@ -308,10 +318,12 @@
     function renderListRows() {
       const folder = state.events.find((e) => e.id === state.selectedFolderId);
       const titleEl = document.getElementById("listFolderName");
+      const dateEl = document.getElementById("listFolderDate");
       const countEl = document.getElementById("listCountBadge");
       const tbody = document.getElementById("listTableBody");
 
       if (titleEl) titleEl.textContent = folder ? folder.name : "フォルダ未選択";
+      if (dateEl) dateEl.textContent = folder ? `日にち：${formatEventDate(folder.eventDate)}` : "";
 
       const rows = getFilteredAndSortedItems();
       if (countEl) countEl.textContent = `${rows.length}件`;
@@ -375,7 +387,9 @@
       const qrBox = document.getElementById("formCheckQrBox");
 
       if (label) {
-        label.textContent = folder ? `対象フォルダ：${folder.name}` : "対象フォルダ：未選択";
+        label.textContent = folder
+          ? `対象：${folder.name}（${formatEventDate(folder.eventDate)}）`
+          : "対象フォルダ：未選択";
       }
 
       const url = getFormUrl();
@@ -503,11 +517,12 @@
     function exportExcel() {
       const folder = state.events.find((e) => e.id === state.selectedFolderId);
       const rowsData = getFilteredAndSortedItems();
-      const headers = ["No", "フォルダ", "氏名", "フリガナ", "学年", "性別", "種目", "連絡先", "住所", "申込日時"];
+      const headers = ["No", "大会名", "日にち", "氏名", "フリガナ", "学年", "性別", "種目", "連絡先", "住所", "申込日時"];
 
       const tableRows = rowsData.map((item, i) => [
         String(i + 1),
         folder?.name || "",
+        formatEventDate(folder?.eventDate),
         item.name || "",
         item.kana || "",
         item.grade || "",
@@ -635,6 +650,55 @@
       document.getElementById("navFormCheckBtn").addEventListener("click", () => switchView("formCheck"));
       document.getElementById("backToFoldersBtn").addEventListener("click", () => switchView("folders"));
 
+      // 「フォルダ新規作成」ボタンの開閉
+      document.getElementById("openCreateFolderBtn").addEventListener("click", () => {
+        state.isCreateFolderOpen = !state.isCreateFolderOpen;
+        const box = document.getElementById("createFolderBox");
+        box.classList.toggle("hidden", !state.isCreateFolderOpen);
+        if (state.isCreateFolderOpen) {
+          document.getElementById("newTournamentNameInput").focus();
+        }
+      });
+
+      document.getElementById("cancelCreateFolderBtn").addEventListener("click", () => {
+        state.isCreateFolderOpen = false;
+        document.getElementById("createFolderBox").classList.add("hidden");
+        document.getElementById("createFolderForm").reset();
+      });
+
+      // 大会名・日にちを入力してフォルダ作成
+      document.getElementById("createFolderForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const nameInput = document.getElementById("newTournamentNameInput");
+        const dateInput = document.getElementById("newTournamentDateInput");
+        const tournamentName = nameInput.value.trim();
+        const eventDate = dateInput.value;
+
+        if (!tournamentName || !eventDate) {
+          showToast("大会名と日にちを入力してください", "error");
+          return;
+        }
+
+        const btn = document.getElementById("createFolderSubmitBtn");
+        btn.disabled = true;
+        try {
+          await addDoc(collection(db, "events"), {
+            name: tournamentName,
+            eventDate: eventDate,
+            createdAt: Date.now()
+          });
+          e.target.reset();
+          state.isCreateFolderOpen = false;
+          document.getElementById("createFolderBox").classList.add("hidden");
+          showToast("フォルダを作成しました", "success");
+        } catch (err) {
+          console.error(err);
+          showToast("作成に失敗しました", "error");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
       document.getElementById("toggleFilterBtn").addEventListener("click", () => {
         state.isFilterPanelOpen = !state.isFilterPanelOpen;
         document.getElementById("filterPanel").classList.toggle("hidden", !state.isFilterPanelOpen);
@@ -653,21 +717,6 @@
         state.selectedCategories.clear();
         renderCheckGroups();
         renderListRows();
-      });
-
-      document.getElementById("createFolderForm").addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const input = document.getElementById("newFolderInput");
-        const name = input.value.trim();
-        if (!name) return;
-        try {
-          await addDoc(collection(db, "events"), { name, createdAt: Date.now() });
-          input.value = "";
-          showToast("フォルダを作成しました", "success");
-        } catch (err) {
-          console.error(err);
-          showToast("作成に失敗しました", "error");
-        }
       });
 
       document.getElementById("copyUrlBtn").addEventListener("click", async () => {
@@ -696,6 +745,7 @@
           await addDoc(collection(db, "submissions"), {
             eventId: state.selectedFolderId,
             eventName: folder?.name || "",
+            eventDate: folder?.eventDate || "",
             name: document.getElementById("mName").value.trim(),
             kana: document.getElementById("mKana").value.trim(),
             grade: document.getElementById("mGrade").value,
@@ -793,7 +843,7 @@
       <div class="max-w-5xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 class="text-base sm:text-lg font-bold text-slate-900">申し込み管理</h1>
-          <p class="text-[11px] text-slate-500">フォルダごとの申込者確認・QR案内・手動入力・Excel出力</p>
+          <p class="text-[11px] text-slate-500">大会フォルダごとの申込者確認・QR案内・手動入力・Excel出力</p>
         </div>
         <div class="flex items-center gap-1.5 sm:gap-2">
           <button
@@ -827,9 +877,16 @@
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 class="text-base font-bold text-slate-900">フォルダ</h2>
-            <p class="text-xs text-slate-500">フォルダを押すと、そのフォルダの申込者一覧が自動で表示されます。</p>
+            <p class="text-xs text-slate-500">大会名と日にちを確認し、フォルダを押すと申込者一覧が自動で表示されます。</p>
           </div>
-          <div class="flex items-center gap-1.5">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <button
+              id="openCreateFolderBtn"
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              フォルダ新規作成
+            </button>
             <button
               id="exportJsonBtn"
               type="button"
@@ -848,21 +905,49 @@
           </div>
         </div>
 
-        <form id="createFolderForm" class="flex gap-2">
-          <input
-            id="newFolderInput"
-            type="text"
-            required
-            placeholder="新しいフォルダ名（例: 春季大会 申込）"
-            class="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            type="submit"
-            class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold whitespace-nowrap"
-          >
-            作成
-          </button>
-        </form>
+        <!-- フォルダ新規作成入力欄（「フォルダ新規作成」押下で表示） -->
+        <div id="createFolderBox" class="hidden p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-3">
+          <div class="text-xs font-bold text-slate-800">新しい大会フォルダを作成</div>
+          <form id="createFolderForm" class="space-y-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label for="newTournamentNameInput" class="block text-xs font-semibold text-slate-700 mb-1">大会名 *</label>
+                <input
+                  id="newTournamentNameInput"
+                  type="text"
+                  required
+                  placeholder="例: 第11回 尼崎オープン大会"
+                  class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label for="newTournamentDateInput" class="block text-xs font-semibold text-slate-700 mb-1">日にち *</label>
+                <input
+                  id="newTournamentDateInput"
+                  type="date"
+                  required
+                  class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+              <button
+                id="cancelCreateFolderBtn"
+                type="button"
+                class="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold"
+              >
+                キャンセル
+              </button>
+              <button
+                id="createFolderSubmitBtn"
+                type="submit"
+                class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
+              >
+                作成する
+              </button>
+            </div>
+          </form>
+        </div>
 
         <div id="foldersListBox" class="space-y-2"></div>
       </section>
@@ -870,7 +955,7 @@
       <!-- 2. 申込者一覧画面（フォルダ選択で自動表示・「並び替え・条件指定」ボタン） -->
       <section id="viewList" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <button
               id="backToFoldersBtn"
               type="button"
@@ -878,10 +963,15 @@
             >
               ← フォルダ
             </button>
-            <h2 id="listFolderName" class="text-base font-bold text-slate-900">一覧</h2>
-            <span id="listCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold">
-              0件
-            </span>
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 id="listFolderName" class="text-base font-bold text-slate-900">一覧</h2>
+                <span id="listCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold">
+                  0件
+                </span>
+              </div>
+              <div id="listFolderDate" class="text-xs font-medium text-blue-700"></div>
+            </div>
           </div>
 
           <div class="flex items-center gap-1.5">

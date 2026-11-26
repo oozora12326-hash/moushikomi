@@ -29,7 +29,7 @@
       appId: "1:000000000000:web:moushikomi-59749"
     };
 
-    const ADMIN_PASSCODE = "admin1234"; // 必要に応じて変更してください
+    const ADMIN_PASSCODE = "1234"; // 必要に応じて変更してください
 
     const GRADE_OPTIONS = [
       "幼児",
@@ -40,6 +40,7 @@
       "壮年"
     ];
 
+    const GENDER_OPTIONS = ["男性", "女性"];
     const CATEGORY_OPTIONS = ["形", "組手", "両方"];
 
     const app = initializeApp(firebaseConfig);
@@ -115,6 +116,13 @@
         gradeSelect.innerHTML =
           `<option value="">学年を選択してください</option>` +
           GRADE_OPTIONS.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join("");
+      }
+
+      const genderSelect = document.getElementById("mGender");
+      if (genderSelect) {
+        genderSelect.innerHTML =
+          `<option value="">性別を選択してください</option>` +
+          GENDER_OPTIONS.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
       }
 
       const catSelect = document.getElementById("mCategory");
@@ -208,8 +216,13 @@
 
       const items = getFolderItems();
       const grades = Array.from(new Set(items.map((x) => (x.grade || "").trim()).filter(Boolean)));
-      const genders = Array.from(new Set(items.map((x) => (x.gender || "").trim()).filter(Boolean)));
-      const categories = Array.from(new Set(items.map((x) => (x.category || "").trim()).filter(Boolean)));
+      // 性別は「男性」「女性」を常に表示（データに存在しない値があっても含める）
+      const genders = Array.from(
+        new Set([...GENDER_OPTIONS, ...items.map((x) => (x.gender || "").trim()).filter(Boolean)])
+      );
+      const categories = Array.from(
+        new Set([...CATEGORY_OPTIONS, ...items.map((x) => (x.category || "").trim()).filter(Boolean)])
+      );
 
       Array.from(state.selectedGrades).forEach((v) => {
         if (!grades.includes(v)) state.selectedGrades.delete(v);
@@ -478,7 +491,6 @@
       showToast("JSONバックアップから復元しました", "success");
     }
 
-    // 文字数（全角2・半角1相当）からExcel列幅ポイント値を算出
     function calcExcelColumnWidth(str) {
       const s = String(str ?? "");
       let units = 0;
@@ -1005,12 +1017,7 @@
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <select id="mGrade" class="rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white"></select>
-              <select id="mGender" class="rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white">
-                <option value="">性別を選択</option>
-                <option value="男性">男性</option>
-                <option value="女性">女性</option>
-                <option value="その他">その他</option>
-              </select>
+              <select id="mGender" class="rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white"></select>
               <select id="mCategory" class="rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white"></select>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">

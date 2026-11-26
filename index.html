@@ -733,67 +733,117 @@
       showToast("JSONバックアップから復元しました", "success");
     }
 
+    // セル内の文字列長（全角・半角・改行）を読み取り、Excel列幅(pt)を自動算出
     function calcExcelColumnWidth(str) {
-      const s = String(str ?? "");
-      let units = 0;
-      for (const ch of s) {
-        units += ch.charCodeAt(0) > 255 ? 2.1 : 1.15;
+      const text = String(str ?? "");
+      if (!text) return 68;
+      const lines = text.split(/\r?\n/);
+      let maxLineUnits = 0;
+
+      for (const line of lines) {
+        let units = 0;
+        for (const ch of line) {
+          const code = ch.charCodeAt(0);
+          // 全角文字・日本語・記号は広め、半角英数字は狭めに見積もる
+          const isWide =
+            code > 0x00ff ||
+            (code >= 0xff61 && code <= 0xff9f);
+          units += isWide ? 2.15 : 1.15;
+        }
+        if (units > maxLineUnits) {
+          maxLineUnits = units;
+        }
       }
-      return Math.max(8, Math.min(65, Math.ceil((units + 3) * 7.2)));
+
+      // 文字単位をExcel列幅(ポイント)へ変換し、左右余白を加える（最小68pt / 最大480pt）
+      const widthPt = Math.ceil(maxLineUnits * 7.8 + 24);
+      return Math.max(68, Math.min(480, widthPt));
+    }
+
+    function sanitizeSheetName(rawName) {
+      const cleaned = String(rawName || "申込者一覧")
+        .replace(/[\\/?*[\]:]/g, "_")
+        .trim();
+      return (cleaned || "申込者一覧").slice(0, 31);
+    }
+
+    function sanitizeFileName(rawName) {
+      const cleaned = String(rawName || "申込者一覧")
+        .replace(/[\\/:*?"<>|]/g, "_")
+        .trim();
+      return cleaned || "申込者一覧";
     }
 
     function exportExcel() {
-      const folder = state.events.find((e) => e.id === state.selectedFolderId);
-      const rowsData = getFilteredAndSortedItems();
-      const headers = ["No", "大会名", "日にち", "氏名", "フリガナ", "学年", "性別", "種目", "連絡先", "住所", "申込日時"];
+      try {
+        const folder = state.events.find((e) => e.id === state.selectedFolderId);
+        const rowsData = getFilteredAndSortedItems();
 
-      const tableRows = rowsData.map((item, i) => [
-        String(i + 1),
-        folder?.name || "",
-        formatEventDate(folder?.eventDate),
-        item.name || "",
-        item.kana || "",
-        item.grade || "",
-        item.gender || "",
-        item.category || "",
-        item.phone || "",
-        item.address || "",
-        formatDateTime(item.createdAt)
-      ]);
-
-      const colWidths = headers.map((h, colIdx) => {
-        let maxW = calcExcelColumnWidth(h);
-        tableRows.forEach((r) => {
-          const w = calcExcelColumnWidth(r[colIdx]);
-          if (w > maxW) maxW = w;
+        // フォルダで有効な入力項目を取得（データ側にあるキーも安全に拾う）
+        const folderFieldKeys = getFolderFields(folder);
+        const extraKeysFromItems = [];
+        rowsData.forEach((item) => {
+          if (item && typeof item === "object") {
+            FORM_FIELDS.forEach((f) => {
+              if (item[f.key] && !folderFieldKeys.includes(f.key) && !extraKeysFromItems.includes(f.key)) {
+                extraKeysFromItems.push(f.key);
+              }
+            });
+          }
         });
-        return maxW;
-      });
+        const dynamicKeys = [...folderFieldKeys, ...extraKeysFromItems];
 
-      const columnsXml = colWidths
-        .map((w) => `<Column ss:AutoFitWidth="0" ss:Width="${w}"/>`)
-        .join("");
+        const headers = [
+          "No",
+          "大会名",
+          "日にち",
+          ...dynamicKeys.map((k) => getFieldLabel(k)),
+          "申込日時"
+        ];
 
-      const headerRowXml =
-        `<Row ss:StyleID="HeaderStyle">` +
-        headers.map((h) => `<Cell><Data ss:Type="String">${escapeXml(h)}</Data></Cell>`).join("") +
-        `</Row>`;
+        const tableRows = rowsData.map((item, i) => [
+          String(i + 1),
+          String(folder?.name || item?.eventName || ""),
+          String(formatEventDate(folder?.eventDate || item?.eventDate || "")),
+          ...dynamicKeys.map((k) => String(item?.[k] ?? "")),
+          String(formatDateTime(item?.createdAt))
+        ]);
 
-      const dataRowsXml = tableRows
-        .map((r) => {
-          const cells = r
-            .map((val, idx) => {
-              const styleAttr = idx === 0 ? ` ss:StyleID="CenterStyle"` : ` ss:StyleID="BodyStyle"`;
-              return `<Cell${styleAttr}><Data ss:Type="String">${escapeXml(val)}</Data></Cell>`;
-            })
-            .join("");
-          return `<Row>${cells}</Row>`;
-        })
-        .join("");
+        const colWidths = headers.map((h, colIdx) => {
+          let maxW = calcExcelColumnWidth(h);
+          for (const r of tableRows) {
+            const w = calcExcelColumnWidth(r[colIdx]);
+            if (w > maxW) {
+              maxW = w;
+            }
+          }
+          return maxW;
+        });
 
-      const sheetName = escapeXml((folder?.name || "申込者一覧").slice(0, 31));
+        const columnsXml = colWidths
+          .map((w) => `<Column ss:AutoFitWidth="0" ss:Width="${w}"/>`)
+          .join("");
 
-      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+        const headerRowXml =
+          `<Row ss:AutoFitHeight="1" ss:StyleID="HeaderStyle">` +
+          headers.map((h) => `<Cell><Data ss:Type="String">${escapeXml(h)}</Data></Cell>`).join("") +
+          `</Row>`;
+
+        const dataRowsXml = tableRows
+          .map((r) => {
+            const cells = r
+              .map((val, idx) => {
+                const styleAttr = idx === 0 ? ` ss:StyleID="CenterStyle"` : ` ss:StyleID="BodyStyle"`;
+                return `<Cell${styleAttr}><Data ss:Type="String">${escapeXml(val)}</Data></Cell>`;
+              })
+              .join("");
+            return `<Row ss:AutoFitHeight="1">${cells}</Row>`;
+          })
+          .join("");
+
+        const sheetName = escapeXml(sanitizeSheetName(folder?.name || "申込者一覧"));
+
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
   xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -844,14 +894,22 @@
   </Worksheet>
 </Workbook>`;
 
-      const blob = new Blob([xml], { type: "application/vnd.ms-excel;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${folder?.name || "申込者一覧"}_${new Date().toISOString().slice(0, 10)}.xls`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast("Excelファイルを出力しました", "success");
+        const blob = new Blob([xml], { type: "application/vnd.ms-excel;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const baseFileName = sanitizeFileName(folder?.name || "申込者一覧");
+        const dateStamp = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `${baseFileName}_${dateStamp}.xls`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showToast("Excelファイルを出力しました", "success");
+      } catch (err) {
+        console.error("Excel出力エラー:", err);
+        showToast("Excel出力に失敗しました", "error");
+      }
     }
 
     document.addEventListener("DOMContentLoaded", () => {

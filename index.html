@@ -1,1213 +1,288 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>申し込み管理システム</title>
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <!-- QRCode.js -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- SheetJS (Excel出力用) -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
-    body {
-      font-family: 'Noto Sans JP', sans-serif;
-      -webkit-tap-highlight-color: transparent;
-    }
-    /* PDF印刷用スタイル */
-    @media print {
-      body * {
-        visibility: hidden;
-      }
-      #print-area, #print-area * {
-        visibility: visible;
-      }
-      #print-area {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        background: white !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        box-shadow: none !important;
-      }
-      .no-print {
-        display: none !important;
-      }
-      table {
-        width: 100% !important;
-        border-collapse: collapse !important;
-        font-size: 10pt !important;
-      }
-      th, td {
-        border: 1px solid #333 !important;
-        padding: 6px 8px !important;
-        color: #000 !important;
-      }
-      th {
-        background-color: #f3f4f6 !important;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-      }
-    }
-  </style>
-</head>
-<body class="bg-slate-50 text-slate-800 min-h-screen">
+/**
+ * 申し込み管理システム（moushikomi-59749）Firestore 自動バックアップ GAS
+ * - Googleドライブの指定フォルダへ JSON バックアップを保存（復元用）
+ * - 紐づいたGoogleスプレッドシートへ「申込一覧」「フォルダ一覧」を書き出し
+ */
 
-  <!-- ==================== 1. 申し込み者用フォーム画面 ==================== -->
-  <div id="view-applicant" class="hidden min-h-screen bg-slate-100 pb-12">
-    <!-- プレビュー時の戻りバー -->
-    <div id="preview-banner" class="hidden bg-emerald-700 text-white px-4 py-2.5 shadow-md sticky top-0 z-50">
-      <div class="max-w-xl mx-auto flex items-center justify-between">
-        <span class="text-xs sm:text-sm font-bold flex items-center gap-1.5">
-          <i data-lucide="eye" class="w-4 h-4"></i> 申し込み者側画面のプレビュー表示中
-        </span>
-        <button id="btn-back-to-admin" type="button" class="bg-white text-emerald-800 hover:bg-emerald-50 text-xs font-bold px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-1 transition">
-          <i data-lucide="arrow-left" class="w-3.5 h-3.5"></i> 管理画面に戻る
-        </button>
-      </div>
-    </div>
+const FIRESTORE_PROJECT_ID = 'moushikomi-59749';
+const BACKUP_DRIVE_FOLDER_NAME = '申し込み管理_自動バックアップ';
+const BACKUP_DRIVE_FOLDER_ID = ''; // 特定の既存フォルダIDに固定したい場合はここに入力（例: '1AbCdEfGhIj...'）
+const KEEP_DAYS = 30; // この日数を過ぎたJSONバックアップをゴミ箱へ移動（0にすると削除しない）
 
-    <div class="max-w-xl mx-auto px-4 pt-6">
-      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="bg-blue-600 px-6 py-5 text-white">
-          <p class="text-xs font-medium text-blue-100 mb-1">オンライン申し込みフォーム</p>
-          <h1 id="applicant-event-title" class="text-xl sm:text-2xl font-bold leading-snug">読み込み中...</h1>
-        </div>
+/**
+ * 毎日自動実行（トリガー）用のメイン関数
+ */
+function runDailyFirestoreBackup() {
+  const now = new Date();
+  const timestampLabel = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMMdd_HHmm');
+  const displayTime = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
 
-        <!-- エラー表示（存在しないイベント等） -->
-        <div id="applicant-error" class="hidden p-8 text-center">
-          <div class="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-3">
-            <i data-lucide="alert-circle" class="w-6 h-6"></i>
-          </div>
-          <h2 class="text-lg font-bold text-slate-800 mb-1">指定された申し込みが見つかりません</h2>
-          <p class="text-sm text-slate-500">URLが正しいか、主催者へお問い合わせください。</p>
-        </div>
+  // 1. Firestore から events と submissions を全件取得
+  const events = fetchAllDocuments('events');
+  const submissions = fetchAllDocuments('submissions');
 
-        <!-- 送信完了画面 -->
-        <div id="applicant-success" class="hidden p-8 text-center">
-          <div class="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
-            <i data-lucide="check-circle-2" class="w-8 h-8"></i>
-          </div>
-          <h2 class="text-xl font-bold text-slate-800 mb-2">申し込みを受け付けました</h2>
-          <p class="text-sm text-slate-600 mb-6">ご入力ありがとうございました。内容は正常に送信されました。</p>
-          <button id="btn-new-entry" type="button" class="inline-flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-5 py-2.5 rounded-xl text-sm transition">
-            続けて別の人を申し込む
-          </button>
-        </div>
+  // 2. 復元用 JSON ペイロード作成
+  const backupPayload = {
+    appName: 'moushikomi-kanri',
+    projectId: FIRESTORE_PROJECT_ID,
+    exportedAt: now.toISOString(),
+    exportedAtJst: displayTime,
+    counts: {
+      events: events.length,
+      submissions: submissions.length
+    },
+    events: events,
+    submissions: submissions
+  };
 
-        <!-- 入力フォーム本体 -->
-        <form id="applicant-form" class="p-6 space-y-5">
-          <div>
-            <label class="block text-sm font-bold text-slate-700 mb-1.5">
-              お名前 <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-            </label>
-            <input type="text" id="inp-name" required placeholder="例：山田 太郎"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base" />
-          </div>
+  const jsonString = JSON.stringify(backupPayload, null, 2);
+  const fileName = `申し込みバックアップ_${timestampLabel}.json`;
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-bold text-slate-700 mb-1.5">
-                学年 <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-              </label>
-              <select id="inp-grade" required
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-base">
-                <option value="">選択してください</option>
-                <option value="小1">小1</option>
-                <option value="小2">小2</option>
-                <option value="小3">小3</option>
-                <option value="小4">小4</option>
-                <option value="小5">小5</option>
-                <option value="小6">小6</option>
-                <option value="中1">中1</option>
-                <option value="中2">中2</option>
-                <option value="中3">中3</option>
-                <option value="高1">高1</option>
-                <option value="高2">高2</option>
-                <option value="高3">高3</option>
-                <option value="一般">一般</option>
-              </select>
-            </div>
+  // 3. Googleドライブに JSON 保存＆古いファイルの整理
+  const folder = getTargetBackupFolder();
+  const savedFile = saveJsonToDrive(folder, fileName, jsonString);
+  if (KEEP_DAYS > 0) {
+    cleanupOldBackups(folder, KEEP_DAYS);
+  }
 
-            <div>
-              <label class="block text-sm font-bold text-slate-700 mb-1.5">
-                性別 <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-              </label>
-              <select id="inp-gender" required
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-base">
-                <option value="">選択してください</option>
-                <option value="男性">男性</option>
-                <option value="女性">女性</option>
-                <option value="その他">その他</option>
-              </select>
-            </div>
-          </div>
+  // 4. スプレッドシートに一覧を書き出し
+  writeToSpreadsheet(events, submissions, displayTime);
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm font-bold text-slate-700 mb-1.5">
-                生年月日 <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-              </label>
-              <input type="date" id="inp-dob" required
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base" />
-            </div>
+  Logger.log(
+    `バックアップ完了: ${savedFile.getName()} (フォルダ: ${events.length}件, 申込: ${submissions.length}件)`
+  );
+}
 
-            <div>
-              <label class="block text-sm font-bold text-slate-700 mb-1.5">
-                種目（種類） <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-              </label>
-              <select id="inp-category" required
-                class="w-full px-4 py-3 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-base">
-                <option value="">選択してください</option>
-                <option value="形">形</option>
-                <option value="組手">組手</option>
-                <option value="両方">両方</option>
-              </select>
-            </div>
-          </div>
+/**
+ * Firestore REST API から指定コレクションの全ドキュメントを取得
+ */
+function fetchAllDocuments(collectionName) {
+  const results = [];
+  let pageToken = null;
 
-          <div>
-            <label class="block text-sm font-bold text-slate-700 mb-1.5">
-              住所 <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-            </label>
-            <input type="text" id="inp-address" required placeholder="例：兵庫県尼崎市〇〇町1-2-3"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base" />
-          </div>
+  do {
+    const baseUrl =
+      `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(FIRESTORE_PROJECT_ID)}` +
+      `/databases/(default)/documents/${encodeURIComponent(collectionName)}?pageSize=300`;
+    const url = pageToken ? `${baseUrl}&pageToken=${encodeURIComponent(pageToken)}` : baseUrl;
 
-          <div>
-            <label class="block text-sm font-bold text-slate-700 mb-1.5">
-              連絡先（電話番号） <span class="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded ml-1">必須</span>
-            </label>
-            <input type="tel" id="inp-phone" required placeholder="例：090-1234-5678"
-              class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base" />
-          </div>
-
-          <div class="pt-2">
-            <button type="submit" id="btn-submit-applicant"
-              class="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold py-4 rounded-xl shadow-md transition text-base flex items-center justify-center gap-2">
-              <i data-lucide="send" class="w-5 h-5"></i> 申し込みを送信する
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div>
-
-  <!-- ==================== 2. 管理者ログイン画面 ==================== -->
-  <div id="view-login" class="hidden min-h-screen flex items-center justify-center px-4 bg-slate-100">
-    <div class="bg-white w-full max-w-md rounded-2xl shadow-lg border border-slate-200 p-8">
-      <div class="w-14 h-14 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-5">
-        <i data-lucide="shield-lock" class="w-7 h-7"></i>
-      </div>
-      <h1 class="text-xl font-bold text-center text-slate-800 mb-1">申し込み管理システム</h1>
-      <p class="text-sm text-center text-slate-500 mb-6">管理者パスワードを入力してください</p>
-
-      <form id="login-form" class="space-y-4">
-        <div>
-          <input type="password" id="login-password" required placeholder="パスワード（初期値: 1234）"
-            class="w-full px-4 py-3.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-center text-lg tracking-widest" />
-        </div>
-        <p id="login-error" class="hidden text-sm text-red-600 text-center font-medium">パスワードが正しくありません</p>
-        <button type="submit" id="btn-login"
-          class="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold py-3.5 rounded-xl shadow transition">
-          ログインする
-        </button>
-      </form>
-    </div>
-  </div>
-
-  <!-- ==================== 3. 管理者メイン画面 ==================== -->
-  <div id="view-admin" class="hidden min-h-screen flex flex-col">
-    <!-- ヘッダー -->
-    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 no-print">
-      <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-        <div class="flex items-center gap-2.5 cursor-pointer" id="header-home-btn">
-          <div class="w-9 h-9 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-sm">
-            <i data-lucide="folder-kanban" class="w-5 h-5"></i>
-          </div>
-          <span class="font-bold text-lg text-slate-800 tracking-tight">申し込み管理</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <button id="btn-open-settings" type="button" class="p-2.5 text-slate-600 hover:bg-slate-100 rounded-xl transition flex items-center gap-1.5 text-sm font-medium">
-            <i data-lucide="settings" class="w-4 h-4"></i>
-            <span class="hidden sm:inline">パスワード設定</span>
-          </button>
-          <button id="btn-logout" type="button" class="p-2.5 text-slate-600 hover:bg-red-50 hover:text-red-600 rounded-xl transition flex items-center gap-1.5 text-sm font-medium">
-            <i data-lucide="log-out" class="w-4 h-4"></i>
-            <span class="hidden sm:inline">ログアウト</span>
-          </button>
-        </div>
-      </div>
-    </header>
-
-    <!-- Firebase接続注意バナー -->
-    <div id="firebase-warning-banner" class="hidden bg-amber-50 border-b border-amber-200 px-4 py-3 no-print">
-      <div class="max-w-6xl mx-auto flex items-start gap-3 text-amber-800 text-xs sm:text-sm">
-        <i data-lucide="alert-triangle" class="w-5 h-5 text-amber-600 shrink-0 mt-0.5"></i>
-        <div>
-          <p class="font-bold">Firebase Firestoreのデータベース設定を確認してください</p>
-          <p class="mt-0.5">現在クラウドとの同期が制限されています（ローカル一時保存で動作中）。スマホ等とデータ共有するには、Firebaseコンソールで「Firestore Database」を作成し、ルールをテストモード（読み書き許可）に設定してください。</p>
-        </div>
-      </div>
-    </div>
-
-    <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-6">
-
-      <!-- ===== A. フォルダ一覧ビュー ===== -->
-      <div id="admin-folder-list-view">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-          <div>
-            <h2 class="text-xl font-bold text-slate-800">申し込みフォルダ一覧</h2>
-            <p class="text-sm text-slate-500 mt-0.5">大会やイベントごとにフォルダを作成し、専用URL・QRコードを発行できます</p>
-          </div>
-          <button id="btn-open-create-folder" type="button"
-            class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-3 rounded-xl shadow-sm transition flex items-center justify-center gap-2 shrink-0">
-            <i data-lucide="folder-plus" class="w-5 h-5"></i> 新規申し込みフォルダ作成
-          </button>
-        </div>
-
-        <!-- フォルダグリッド -->
-        <div id="folders-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <!-- JSで描画 -->
-        </div>
-
-        <!-- フォルダ0件時の表示 -->
-        <div id="folders-empty" class="hidden bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center">
-          <div class="w-14 h-14 bg-slate-100 text-slate-400 rounded-2xl flex items-center justify-center mx-auto mb-3">
-            <i data-lucide="folder-open" class="w-7 h-7"></i>
-          </div>
-          <h3 class="text-base font-bold text-slate-700 mb-1">まだフォルダがありません</h3>
-          <p class="text-sm text-slate-500 mb-4">「新規申し込みフォルダ作成」から最初の申し込み受付を作成しましょう。</p>
-        </div>
-      </div>
-
-      <!-- ===== B. フォルダ詳細（データ一覧・抽出・出力）ビュー ===== -->
-      <div id="admin-folder-detail-view" class="hidden">
-        <!-- 上部ナビゲーション -->
-        <div class="flex flex-wrap items-center justify-between gap-3 mb-5 no-print">
-          <button id="btn-back-folders" type="button"
-            class="inline-flex items-center gap-1.5 text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3.5 py-2 rounded-xl text-sm font-bold shadow-sm transition">
-            <i data-lucide="chevron-left" class="w-4 h-4"></i> フォルダ一覧へ戻る
-          </button>
-
-          <div class="flex flex-wrap items-center gap-2">
-            <button id="btn-detail-qr" type="button"
-              class="inline-flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3.5 py-2 rounded-xl text-sm font-bold transition">
-              <i data-lucide="qr-code" class="w-4 h-4"></i> QR・URL表示 / プレビュー
-            </button>
-            <button id="btn-export-excel" type="button"
-              class="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition">
-              <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Excel保存
-            </button>
-            <button id="btn-export-pdf" type="button"
-              class="inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition">
-              <i data-lucide="printer" class="w-4 h-4"></i> PDF保存
-            </button>
-          </div>
-        </div>
-
-        <!-- フィルタ＆並び替えコントロールバー -->
-        <div class="bg-white rounded-2xl border border-slate-200 p-4 mb-5 shadow-sm no-print space-y-4">
-          <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <!-- 種目（種類）フィルター -->
-            <div>
-              <span class="block text-xs font-bold text-slate-500 mb-1.5">種目で絞り込み</span>
-              <div class="inline-flex rounded-xl bg-slate-100 p-1" id="category-filter-group">
-                <button type="button" data-cat="ALL" class="cat-btn px-3.5 py-1.5 rounded-lg text-sm font-bold bg-white text-blue-600 shadow-sm transition">すべて</button>
-                <button type="button" data-cat="形" class="cat-btn px-3.5 py-1.5 rounded-lg text-sm font-bold text-slate-600 hover:text-slate-900 transition">形</button>
-                <button type="button" data-cat="組手" class="cat-btn px-3.5 py-1.5 rounded-lg text-sm font-bold text-slate-600 hover:text-slate-900 transition">組手</button>
-                <button type="button" data-cat="両方" class="cat-btn px-3.5 py-1.5 rounded-lg text-sm font-bold text-slate-600 hover:text-slate-900 transition">両方</button>
-              </div>
-            </div>
-
-            <!-- 学年チェックボックスフィルター（複数選択プルダウン） -->
-            <div class="relative" id="grade-dropdown-container">
-              <span class="block text-xs font-bold text-slate-500 mb-1.5">学年で絞り込み（複数選択可）</span>
-              <button type="button" id="btn-grade-dropdown"
-                class="w-full sm:w-64 flex items-center justify-between gap-2 bg-white border border-slate-300 hover:border-blue-500 px-3.5 py-2 rounded-xl text-sm font-bold text-slate-700 transition">
-                <span id="grade-dropdown-label" class="truncate">すべての学年</span>
-                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 shrink-0"></i>
-              </button>
-
-              <!-- プルダウンメニュー本体 -->
-              <div id="grade-dropdown-menu" class="hidden absolute right-0 sm:left-0 mt-1.5 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl z-40 p-3">
-                <div class="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
-                  <span class="text-xs font-bold text-slate-500">表示する学年にチェック</span>
-                  <div class="flex gap-2">
-                    <button type="button" id="btn-grade-select-all" class="text-xs font-bold text-blue-600 hover:underline">全選択</button>
-                    <button type="button" id="btn-grade-clear-all" class="text-xs font-bold text-slate-500 hover:underline">解除</button>
-                  </div>
-                </div>
-                <div id="grade-checkbox-list" class="grid grid-cols-3 gap-1.5 max-h-60 overflow-y-auto py-1">
-                  <!-- JSで小1〜一般のチェックボックスを生成 -->
-                </div>
-              </div>
-            </div>
-
-            <!-- 並び替え（申込順・名前順） -->
-            <div>
-              <span class="block text-xs font-bold text-slate-500 mb-1.5">並び替え</span>
-              <select id="select-sort" class="w-full sm:w-44 bg-white border border-slate-300 px-3.5 py-2 rounded-xl text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="created">申込順（新しい順）</option>
-                <option value="name">名前順（あいうえお順）</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <!-- 印刷・出力対象エリア -->
-        <div id="print-area" class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50/70">
-            <div>
-              <h2 id="detail-folder-title" class="text-lg sm:text-xl font-bold text-slate-800">フォルダ名</h2>
-              <p id="detail-filter-summary" class="text-xs text-slate-500 mt-0.5">条件: すべて</p>
-            </div>
-            <div class="text-sm font-bold text-blue-700 bg-blue-50 px-3.5 py-1.5 rounded-xl border border-blue-100">
-              表示件数: <span id="detail-count">0</span> 名
-            </div>
-          </div>
-
-          <div class="overflow-x-auto">
-            <table class="w-full text-left border-collapse">
-              <thead>
-                <tr class="bg-slate-100/80 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase">
-                  <th class="py-3 px-4 w-12 text-center">No</th>
-                  <th class="py-3 px-4">お名前</th>
-                  <th class="py-3 px-4">学年</th>
-                  <th class="py-3 px-4">性別</th>
-                  <th class="py-3 px-4">生年月日</th>
-                  <th class="py-3 px-4">種目</th>
-                  <th class="py-3 px-4">住所</th>
-                  <th class="py-3 px-4">連絡先</th>
-                  <th class="py-3 px-4 text-center no-print w-16">操作</th>
-                </tr>
-              </thead>
-              <tbody id="submissions-tbody" class="divide-y divide-slate-200 text-sm">
-                <!-- JSで描画 -->
-              </tbody>
-            </table>
-          </div>
-
-          <div id="submissions-empty" class="hidden p-12 text-center">
-            <p class="text-slate-500 text-sm">該当する申し込みデータがありません。</p>
-          </div>
-        </div>
-      </div>
-
-    </main>
-  </div>
-
-  <!-- ==================== モーダル：新規フォルダ作成 ==================== -->
-  <div id="modal-create-folder" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-bold text-slate-800">新規申し込みフォルダ作成</h3>
-        <button type="button" class="close-modal text-slate-400 hover:text-slate-600 p-1">
-          <i data-lucide="x" class="w-5 h-5"></i>
-        </button>
-      </div>
-      <form id="form-create-folder" class="space-y-4">
-        <div>
-          <label class="block text-sm font-bold text-slate-700 mb-1.5">申し込み名称（大会名・イベント名）</label>
-          <input type="text" id="inp-new-folder-name" required placeholder="例：2026年 春季空手道大会"
-            class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base" />
-        </div>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" class="close-modal px-4 py-2.5 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-100">キャンセル</button>
-          <button type="submit" class="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-sm">作成してURL発行</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- ==================== モーダル：QRコード・URL表示＆プレビュー ==================== -->
-  <div id="modal-qr" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl text-center">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg">申し込み受付用</span>
-        <button type="button" class="close-modal text-slate-400 hover:text-slate-600 p-1">
-          <i data-lucide="x" class="w-5 h-5"></i>
-        </button>
-      </div>
-      <h3 id="qr-modal-title" class="text-lg font-bold text-slate-800 mb-4">イベント名</h3>
-
-      <!-- QRコード描画エリア -->
-      <div class="bg-slate-50 border border-slate-200 rounded-2xl p-5 inline-flex flex-col items-center justify-center mb-4">
-        <div id="qr-code-container" class="bg-white p-3 rounded-xl shadow-xs"></div>
-        <button type="button" id="btn-download-qr" class="mt-3 text-xs font-bold text-blue-600 hover:underline flex items-center gap-1">
-          <i data-lucide="download" class="w-3.5 h-3.5"></i> QR画像を保存
-        </button>
-      </div>
-
-      <!-- URLコピー欄 -->
-      <div class="text-left mb-4">
-        <label class="block text-xs font-bold text-slate-500 mb-1">申し込みフォーム専用URL</label>
-        <div class="flex items-center gap-2">
-          <input type="text" id="qr-url-input" readonly
-            class="flex-1 bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-700 font-mono" />
-          <button type="button" id="btn-copy-url"
-            class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-3.5 py-2.5 rounded-xl shrink-0 transition">
-            コピー
-          </button>
-        </div>
-        <p id="copy-feedback" class="hidden text-xs text-emerald-600 font-bold mt-1">URLをコピーしました！</p>
-      </div>
-
-      <!-- プレビュー起動ボタン -->
-      <div class="border-t border-slate-100 pt-4">
-        <button type="button" id="btn-preview-form"
-          class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-sm transition flex items-center justify-center gap-2 text-sm">
-          <i data-lucide="smartphone" class="w-4 h-4"></i> 申込フォームをプレビュー表示
-        </button>
-        <p class="text-[11px] text-slate-400 mt-1.5">※画面を切り替えて実際の入力フォームを確認できます</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- ==================== モーダル：パスワード設定 ==================== -->
-  <div id="modal-settings" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-lg font-bold text-slate-800">管理者パスワードの変更</h3>
-        <button type="button" class="close-modal text-slate-400 hover:text-slate-600 p-1">
-          <i data-lucide="x" class="w-5 h-5"></i>
-        </button>
-      </div>
-      <form id="form-change-password" class="space-y-4">
-        <div>
-          <label class="block text-sm font-bold text-slate-700 mb-1.5">新しいパスワード</label>
-          <input type="text" id="inp-new-password" required minlength="4" placeholder="4文字以上で入力"
-            class="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base" />
-        </div>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" class="close-modal px-4 py-2.5 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-100">キャンセル</button>
-          <button type="submit" class="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-sm">変更を保存</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- ==================== Firebase & アプリケーションロジック ==================== -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import {
-      getFirestore, collection, doc, setDoc, getDoc, getDocs,
-      addDoc, deleteDoc, onSnapshot, query, where, orderBy, serverTimestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-    // Firebase設定
-    const firebaseConfig = {
-      apiKey: "AIzaSyBwZ-hXsYgzzKbH8wXnysKWWP_GrebOrEY",
-      authDomain: "moushikomi-59749.firebaseapp.com",
-      projectId: "moushikomi-59749",
-      storageBucket: "moushikomi-59749.firebasestorage.app",
-      messagingSenderId: "958066141227",
-      appId: "1:958066141227:web:6e7d4cb821cf807d7aa26e",
-      measurementId: "G-TB7B7C79VM"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-
-    // 定数・状態管理
-    const GRADES = ["小1", "小2", "小3", "小4", "小5", "小6", "中1", "中2", "中3", "高1", "高2", "高3", "一般"];
-    const STORAGE_PW_KEY = "moushikomi_admin_pw";
-    const STORAGE_AUTH_KEY = "moushikomi_is_logged_in";
-    const STORAGE_LOCAL_EVENTS = "moushikomi_local_events";
-    const STORAGE_LOCAL_SUBS = "moushikomi_local_subs";
-
-    let adminPassword = localStorage.getItem(STORAGE_PW_KEY) || "1234";
-    let eventsList = [];
-    let currentFolder = null;
-    let currentSubmissions = [];
-    let unsubscribeSubmissions = null;
-    let isFirebaseAvailable = true;
-
-    // フィルター状態
-    let filterCategory = "ALL"; // ALL, 形, 組手, 両方
-    let selectedGrades = new Set(); // 空の場合は全学年表示
-    let sortBy = "created"; // created, name
-
-    // プレビュー・QR対象イベント
-    let activeQrEvent = null;
-    let isPreviewMode = false;
-
-    // DOM要素取得ヘルパー
-    const $ = (id) => document.getElementById(id);
-
-    // アイコン初期化
-    lucide.createIcons();
-
-    // ==================== 初期ルーティング判定 ====================
-    const urlParams = new URLSearchParams(window.location.search);
-    const eventParamId = urlParams.get("event");
-
-    if (eventParamId) {
-      // URLに ?event=ID がある場合は申し込みフォーム画面のみを表示
-      openApplicantView(eventParamId, false);
-    } else {
-      // 通常アクセスは管理者画面へ
-      initAdminApp();
-    }
-
-    // ==================== 申し込み者画面ロジック ====================
-    async function openApplicantView(eventId, preview = false) {
-      isPreviewMode = preview;
-      $("view-login").classList.add("hidden");
-      $("view-admin").classList.add("hidden");
-      $("view-applicant").classList.remove("hidden");
-      $("applicant-success").classList.add("hidden");
-      $("applicant-error").classList.add("hidden");
-      $("applicant-form").classList.remove("hidden");
-
-      if (preview) {
-        $("preview-banner").classList.remove("hidden");
-      } else {
-        $("preview-banner").classList.add("hidden");
-      }
-
-      // イベント名取得
-      let eventName = "";
-      const localEvents = JSON.parse(localStorage.getItem(STORAGE_LOCAL_EVENTS) || "[]");
-      const foundLocal = localEvents.find(e => e.id === eventId);
-      if (foundLocal) eventName = foundLocal.name;
-
-      try {
-        const snap = await getDoc(doc(db, "events", eventId));
-        if (snap.exists()) {
-          eventName = snap.data().name;
-        }
-      } catch (e) {
-        console.warn("Firestoreイベント取得スキップ:", e);
-      }
-
-      if (!eventName) {
-        $("applicant-event-title").textContent = "エラー";
-        $("applicant-form").classList.add("hidden");
-        $("applicant-error").classList.remove("hidden");
-        return;
-      }
-
-      $("applicant-event-title").textContent = eventName;
-      $("applicant-form").dataset.eventId = eventId;
-      $("applicant-form").dataset.eventName = eventName;
-      lucide.createIcons();
-    }
-
-    // プレビューから管理画面へ戻る
-    $("btn-back-to-admin").addEventListener("click", () => {
-      isPreviewMode = false;
-      $("view-applicant").classList.add("hidden");
-      $("view-admin").classList.remove("hidden");
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      muteHttpExceptions: true
     });
 
-    // 申し込みフォーム送信処理
-    $("applicant-form").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const btn = $("btn-submit-applicant");
-      btn.disabled = true;
-      btn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> 送信中...`;
-      lucide.createIcons();
+    const statusCode = response.getResponseCode();
+    const bodyText = response.getContentText();
 
-      const eventId = $("applicant-form").dataset.eventId;
-      const payload = {
-        eventId,
-        name: $("inp-name").value.trim(),
-        grade: $("inp-grade").value,
-        gender: $("inp-gender").value,
-        dob: $("inp-dob").value,
-        category: $("inp-category").value,
-        address: $("inp-address").value.trim(),
-        phone: $("inp-phone").value.trim(),
-        createdAt: Date.now()
-      };
-
-      // ローカルバックアップ保存
-      const localSubs = JSON.parse(localStorage.getItem(STORAGE_LOCAL_SUBS) || "[]");
-      const localId = "local_" + Date.now();
-      localSubs.push({ id: localId, ...payload });
-      localStorage.setItem(STORAGE_LOCAL_SUBS, JSON.stringify(localSubs));
-
-      try {
-        await addDoc(collection(db, "submissions"), payload);
-      } catch (err) {
-        console.warn("Firestore書き込みエラー（ローカルには保存済み）:", err);
-      }
-
-      btn.disabled = false;
-      btn.innerHTML = `<i data-lucide="send" class="w-5 h-5"></i> 申し込みを送信する`;
-      $("applicant-form").reset();
-      $("applicant-form").classList.add("hidden");
-      $("applicant-success").classList.remove("hidden");
-      lucide.createIcons();
-    });
-
-    $("btn-new-entry").addEventListener("click", () => {
-      $("applicant-success").classList.add("hidden");
-      $("applicant-form").classList.remove("hidden");
-    });
-
-    // ==================== 管理者認証＆初期化 ====================
-    function initAdminApp() {
-      // ログイン状態チェック
-      if (sessionStorage.getItem(STORAGE_AUTH_KEY) === "true") {
-        showAdminDashboard();
-      } else {
-        $("view-login").classList.remove("hidden");
-      }
-
-      // バックグラウンドでFirestoreのパスワード同期
-      syncPasswordFromFirestore();
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error(
+        `Firestore取得エラー (${collectionName} / HTTP ${statusCode}): ${bodyText}`
+      );
     }
 
-    async function syncPasswordFromFirestore() {
-      try {
-        const snap = await getDoc(doc(db, "settings", "admin"));
-        if (snap.exists() && snap.data().password) {
-          adminPassword = snap.data().password;
-          localStorage.setItem(STORAGE_PW_KEY, adminPassword);
-        }
-      } catch (err) {
-        console.warn("パスワード同期エラー:", err);
-      }
-    }
+    const data = JSON.parse(bodyText);
+    const documents = Array.isArray(data.documents) ? data.documents : [];
 
-    // 即時ログイン判定
-    $("login-form").addEventListener("submit", (e) => {
-      e.preventDefault();
-      const inputPw = $("login-password").value;
-      if (inputPw === adminPassword) {
-        $("login-error").classList.add("hidden");
-        sessionStorage.setItem(STORAGE_AUTH_KEY, "true");
-        showAdminDashboard();
-      } else {
-        $("login-error").classList.remove("hidden");
-      }
-    });
-
-    $("btn-logout").addEventListener("click", () => {
-      sessionStorage.removeItem(STORAGE_AUTH_KEY);
-      $("login-password").value = "";
-      $("view-admin").classList.add("hidden");
-      $("view-login").classList.remove("hidden");
-    });
-
-    function showAdminDashboard() {
-      $("view-login").classList.add("hidden");
-      $("view-admin").classList.remove("hidden");
-      initGradeCheckboxes();
-      subscribeEvents();
-      lucide.createIcons();
-    }
-
-    // ==================== フォルダ一覧管理 ====================
-    function subscribeEvents() {
-      // まずローカルデータを即時表示
-      const localEvents = JSON.parse(localStorage.getItem(STORAGE_LOCAL_EVENTS) || "[]");
-      eventsList = localEvents;
-      renderFolders();
-
-      // Firestoreリアルタイム購読
-      try {
-        const q = query(collection(db, "events"), orderBy("createdAt", "desc"));
-        onSnapshot(q, (snapshot) => {
-          isFirebaseAvailable = true;
-          $("firebase-warning-banner").classList.add("hidden");
-          const remoteEvents = [];
-          snapshot.forEach((docSnap) => {
-            remoteEvents.push({ id: docSnap.id, ...docSnap.data() });
-          });
-          eventsList = remoteEvents;
-          localStorage.setItem(STORAGE_LOCAL_EVENTS, JSON.stringify(remoteEvents));
-          renderFolders();
-        }, (err) => {
-          console.warn("Firestore購読エラー:", err);
-          isFirebaseAvailable = false;
-          $("firebase-warning-banner").classList.remove("hidden");
-        });
-      } catch (err) {
-        isFirebaseAvailable = false;
-        $("firebase-warning-banner").classList.remove("hidden");
-      }
-    }
-
-    function renderFolders() {
-      const grid = $("folders-grid");
-      grid.innerHTML = "";
-
-      if (eventsList.length === 0) {
-        $("folders-empty").classList.remove("hidden");
-        return;
-      }
-      $("folders-empty").classList.add("hidden");
-
-      eventsList.forEach((ev) => {
-        const dateStr = ev.createdAt ? new Date(ev.createdAt).toLocaleDateString("ja-JP") : "";
-        const card = document.createElement("div");
-        card.className = "bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:shadow-md hover:border-blue-300 transition flex flex-col justify-between";
-        card.innerHTML = `
-          <div class="cursor-pointer folder-open-area">
-            <div class="flex items-start justify-between gap-2 mb-3">
-              <div class="w-11 h-11 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
-                <i data-lucide="folder" class="w-6 h-6"></i>
-              </div>
-              <button type="button" class="btn-delete-folder text-slate-400 hover:text-red-600 p-1.5 rounded-lg transition" title="フォルダを削除">
-                <i data-lucide="trash-2" class="w-4 h-4"></i>
-              </button>
-            </div>
-            <h3 class="font-bold text-base text-slate-800 line-clamp-2 mb-1">${escapeHtml(ev.name)}</h3>
-            <p class="text-xs text-slate-400">作成日: ${dateStr}</p>
-          </div>
-          <div class="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
-            <button type="button" class="btn-card-open flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1">
-              <i data-lucide="users" class="w-3.5 h-3.5"></i> 一覧を開く
-            </button>
-            <button type="button" class="btn-card-qr bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1">
-              <i data-lucide="qr-code" class="w-3.5 h-3.5"></i> QR・URL
-            </button>
-          </div>
-        `;
-
-        card.querySelector(".folder-open-area").addEventListener("click", (e) => {
-          if (e.target.closest(".btn-delete-folder")) return;
-          openFolderDetail(ev);
-        });
-        card.querySelector(".btn-card-open").addEventListener("click", () => openFolderDetail(ev));
-        card.querySelector(".btn-card-qr").addEventListener("click", () => openQrModal(ev));
-        card.querySelector(".btn-delete-folder").addEventListener("click", () => deleteFolder(ev));
-
-        grid.appendChild(card);
-      });
-      lucide.createIcons();
-    }
-
-    // 新規フォルダ作成
-    $("btn-open-create-folder").addEventListener("click", () => {
-      $("inp-new-folder-name").value = "";
-      $("modal-create-folder").classList.remove("hidden");
-      setTimeout(() => $("inp-new-folder-name").focus(), 50);
-    });
-
-    $("form-create-folder").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const name = $("inp-new-folder-name").value.trim();
-      if (!name) return;
-
-      const id = "ev_" + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
-      const newEvent = { id, name, createdAt: Date.now() };
-
-      // ローカル即時反映
-      const localEvents = JSON.parse(localStorage.getItem(STORAGE_LOCAL_EVENTS) || "[]");
-      localEvents.unshift(newEvent);
-      localStorage.setItem(STORAGE_LOCAL_EVENTS, JSON.stringify(localEvents));
-      eventsList = localEvents;
-      renderFolders();
-
-      $("modal-create-folder").classList.add("hidden");
-      openQrModal(newEvent);
-
-      try {
-        await setDoc(doc(db, "events", id), newEvent);
-      } catch (err) {
-        console.warn("Firestoreフォルダ保存エラー:", err);
-      }
-    });
-
-    async function deleteFolder(ev) {
-      if (!confirm(`「${ev.name}」フォルダを削除しますか？`)) return;
-      const localEvents = JSON.parse(localStorage.getItem(STORAGE_LOCAL_EVENTS) || "[]").filter(item => item.id !== ev.id);
-      localStorage.setItem(STORAGE_LOCAL_EVENTS, JSON.stringify(localEvents));
-      eventsList = localEvents;
-      renderFolders();
-
-      try {
-        await deleteDoc(doc(db, "events", ev.id));
-      } catch (err) {
-        console.warn("Firestore削除エラー:", err);
-      }
-    }
-
-    // ==================== フォルダ詳細・絞り込み・出力 ====================
-    function openFolderDetail(ev) {
-      currentFolder = ev;
-      filterCategory = "ALL";
-      selectedGrades.clear();
-      sortBy = "created";
-
-      // UIリセット
-      updateCategoryButtons();
-      syncGradeCheckboxesUI();
-      $("select-sort").value = "created";
-      $("detail-folder-title").textContent = ev.name;
-
-      $("admin-folder-list-view").classList.add("hidden");
-      $("admin-folder-detail-view").classList.remove("hidden");
-
-      subscribeFolderSubmissions(ev.id);
-    }
-
-    $("btn-back-folders").addEventListener("click", () => {
-      if (unsubscribeSubmissions) {
-        unsubscribeSubmissions();
-        unsubscribeSubmissions = null;
-      }
-      currentFolder = null;
-      $("admin-folder-detail-view").classList.add("hidden");
-      $("admin-folder-list-view").classList.remove("hidden");
-    });
-
-    $("header-home-btn").addEventListener("click", () => {
-      if (!$("admin-folder-detail-view").classList.contains("hidden")) {
-        $("btn-back-folders").click();
-      }
-    });
-
-    $("btn-detail-qr").addEventListener("click", () => {
-      if (currentFolder) openQrModal(currentFolder);
-    });
-
-    function subscribeFolderSubmissions(eventId) {
-      if (unsubscribeSubmissions) unsubscribeSubmissions();
-
-      // ローカルデータ表示
-      const allLocal = JSON.parse(localStorage.getItem(STORAGE_LOCAL_SUBS) || "[]");
-      currentSubmissions = allLocal.filter(s => s.eventId === eventId);
-      renderSubmissionsTable();
-
-      try {
-        const q = query(collection(db, "submissions"), where("eventId", "==", eventId));
-        unsubscribeSubmissions = onSnapshot(q, (snapshot) => {
-          const list = [];
-          snapshot.forEach((docSnap) => {
-            list.push({ id: docSnap.id, ...docSnap.data() });
-          });
-          currentSubmissions = list;
-          renderSubmissionsTable();
-        }, (err) => {
-          console.warn("申込データ購読エラー:", err);
-        });
-      } catch (err) {
-        console.warn("Firestoreクエリエラー:", err);
-      }
-    }
-
-    // 種目フィルターボタン
-    document.querySelectorAll(".cat-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        filterCategory = btn.dataset.cat;
-        updateCategoryButtons();
-        renderSubmissionsTable();
+    documents.forEach((doc) => {
+      const parts = (doc.name || '').split('/');
+      const docId = parts[parts.length - 1] || '';
+      const fieldsObj = decodeFirestoreFields(doc.fields || {});
+      results.push({
+        id: docId,
+        ...fieldsObj
       });
     });
 
-    function updateCategoryButtons() {
-      document.querySelectorAll(".cat-btn").forEach((btn) => {
-        if (btn.dataset.cat === filterCategory) {
-          btn.className = "cat-btn px-3.5 py-1.5 rounded-lg text-sm font-bold bg-white text-blue-600 shadow-sm transition";
-        } else {
-          btn.className = "cat-btn px-3.5 py-1.5 rounded-lg text-sm font-bold text-slate-600 hover:text-slate-900 transition";
-        }
-      });
+    pageToken = data.nextPageToken || null;
+  } while (pageToken);
+
+  return results;
+}
+
+/**
+ * Firestore REST API の fields 構造を通常の JS オブジェクトに変換
+ */
+function decodeFirestoreFields(fields) {
+  const obj = {};
+  Object.keys(fields).forEach((key) => {
+    obj[key] = decodeFirestoreValue(fields[key]);
+  });
+  return obj;
+}
+
+function decodeFirestoreValue(val) {
+  if (!val || typeof val !== 'object') return null;
+
+  if ('stringValue' in val) return val.stringValue;
+  if ('booleanValue' in val) return val.booleanValue;
+  if ('integerValue' in val) return Number(val.integerValue);
+  if ('doubleValue' in val) return Number(val.doubleValue);
+  if ('nullValue' in val) return null;
+  if ('timestampValue' in val) return val.timestampValue;
+  if ('bytesValue' in val) return val.bytesValue;
+  if ('geoPointValue' in val) return val.geoPointValue;
+  if ('referenceValue' in val) return val.referenceValue;
+
+  if ('arrayValue' in val) {
+    const values = (val.arrayValue && Array.isArray(val.arrayValue.values))
+      ? val.arrayValue.values
+      : [];
+    return values.map((item) => decodeFirestoreValue(item));
+  }
+
+  if ('mapValue' in val) {
+    const mapFields = (val.mapValue && val.mapValue.fields) ? val.mapValue.fields : {};
+    return decodeFirestoreFields(mapFields);
+  }
+
+  return null;
+}
+
+/**
+ * 保存先Googleドライブフォルダを取得（ID指定優先、なければ名前で検索または作成）
+ */
+function getTargetBackupFolder() {
+  if (BACKUP_DRIVE_FOLDER_ID && BACKUP_DRIVE_FOLDER_ID.trim() !== '') {
+    return DriveApp.getFolderById(BACKUP_DRIVE_FOLDER_ID.trim());
+  }
+
+  const folders = DriveApp.getFoldersByName(BACKUP_DRIVE_FOLDER_NAME);
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+  return DriveApp.createFolder(BACKUP_DRIVE_FOLDER_NAME);
+}
+
+/**
+ * JSONファイルをGoogleドライブに保存
+ */
+function saveJsonToDrive(folder, fileName, jsonString) {
+  const blob = Utilities.newBlob(jsonString, 'application/json', fileName);
+  return folder.createFile(blob);
+}
+
+/**
+ * 指定日数より古いバックアップファイルをゴミ箱へ移動
+ */
+function cleanupOldBackups(folder, keepDays) {
+  const thresholdMs = Date.now() - keepDays * 24 * 60 * 60 * 1000;
+  const files = folder.getFiles();
+
+  while (files.hasNext()) {
+    const file = files.next();
+    const createdTime = file.getDateCreated().getTime();
+    if (createdTime < thresholdMs) {
+      file.setTrashed(true);
     }
+  }
+}
 
-    // 学年複数選択プルダウン初期化
-    function initGradeCheckboxes() {
-      const container = $("grade-checkbox-list");
-      container.innerHTML = "";
-      GRADES.forEach((g) => {
-        const label = document.createElement("label");
-        label.className = "flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-slate-100 cursor-pointer text-xs font-bold text-slate-700 select-none";
-        label.innerHTML = `
-          <input type="checkbox" value="${g}" class="grade-chk rounded text-blue-600 focus:ring-blue-500 w-4 h-4" />
-          <span>${g}</span>
-        `;
-        label.querySelector("input").addEventListener("change", (e) => {
-          if (e.target.checked) {
-            selectedGrades.add(g);
-          } else {
-            selectedGrades.delete(g);
-          }
-          updateGradeDropdownLabel();
-          renderSubmissionsTable();
-        });
-        container.appendChild(label);
-      });
-    }
+/**
+ * スプレッドシートに「申込一覧」と「フォルダ一覧」を出力
+ */
+function writeToSpreadsheet(events, submissions, stampText) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error('紐づいたスプレッドシートが見つかりません。スプレッドシートの「拡張機能＞Apps Script」から開いてください。');
+  }
 
-    function syncGradeCheckboxesUI() {
-      document.querySelectorAll(".grade-chk").forEach((chk) => {
-        chk.checked = selectedGrades.has(chk.value);
-      });
-      updateGradeDropdownLabel();
-    }
+  // イベントID -> 名称のマップを作成
+  const eventNameMap = {};
+  events.forEach((ev) => {
+    eventNameMap[ev.id] = ev.name || ev.title || '';
+  });
 
-    function updateGradeDropdownLabel() {
-      const labelEl = $("grade-dropdown-label");
-      if (selectedGrades.size === 0 || selectedGrades.size === GRADES.length) {
-        labelEl.textContent = "すべての学年";
-      } else {
-        const ordered = GRADES.filter(g => selectedGrades.has(g));
-        labelEl.textContent = ordered.join(", ");
-      }
-    }
+  // 1. 申込一覧シート
+  let subSheet = ss.getSheetByName('申込一覧');
+  if (!subSheet) {
+    subSheet = ss.insertSheet('申込一覧');
+  }
+  subSheet.clearContents();
 
-    $("btn-grade-dropdown").addEventListener("click", (e) => {
-      e.stopPropagation();
-      $("grade-dropdown-menu").classList.toggle("hidden");
-    });
+  const sortedSubmissions = submissions.slice().sort((a, b) => {
+    const timeA = toEpochMs(a.createdAt);
+    const timeB = toEpochMs(b.createdAt);
+    return timeB - timeA;
+  });
 
-    document.addEventListener("click", (e) => {
-      if (!$("grade-dropdown-container").contains(e.target)) {
-        $("grade-dropdown-menu").classList.add("hidden");
-      }
-    });
+  const subRows = [
+    ['最終更新日時', stampText, '', '', '', '', '', '', '', '', '', ''],
+    [
+      'No',
+      '申し込みフォルダ',
+      '氏名',
+      'フリガナ',
+      '学年',
+      '性別',
+      '生年月日',
+      '種目',
+      '住所',
+      '連絡先',
+      '申込日時',
+      'データID'
+    ]
+  ];
 
-    $("btn-grade-select-all").addEventListener("click", () => {
-      GRADES.forEach(g => selectedGrades.add(g));
-      syncGradeCheckboxesUI();
-      renderSubmissionsTable();
-    });
+  sortedSubmissions.forEach((item, idx) => {
+    const folderLabel =
+      item.eventName ||
+      eventNameMap[item.eventId] ||
+      item.eventId ||
+      '';
 
-    $("btn-grade-clear-all").addEventListener("click", () => {
-      selectedGrades.clear();
-      syncGradeCheckboxesUI();
-      renderSubmissionsTable();
-    });
+    const createdAtText = formatTimestampJst(item.createdAt);
 
-    $("select-sort").addEventListener("change", (e) => {
-      sortBy = e.target.value;
-      renderSubmissionsTable();
-    });
+    subRows.push([
+      idx + 1,
+      folderLabel,
+      item.name || '',
+      item.kana || item.furigana || '',
+      item.grade || '',
+      item.gender || item.sex || '',
+      item.birthDate || item.birthday || '',
+      item.category || item.eventType || item.type || '',
+      item.address || '',
+      item.phone || item.tel || item.contact || '',
+      createdAtText,
+      item.id || ''
+    ]);
+  });
 
-    // 絞り込み＆並び替え済みデータの取得
-    function getFilteredAndSortedSubmissions() {
-      let filtered = [...currentSubmissions];
+  subSheet.getRange(1, 1, subRows.length, 12).setValues(subRows);
 
-      // 1. 種目フィルター
-      if (filterCategory !== "ALL") {
-        filtered = filtered.filter(item => item.category === filterCategory);
-      }
+  // 2. フォルダ一覧シート
+  let evSheet = ss.getSheetByName('フォルダ一覧');
+  if (!evSheet) {
+    evSheet = ss.insertSheet('フォルダ一覧');
+  }
+  evSheet.clearContents();
 
-      // 2. 学年複数チェックフィルター（1つ以上チェックがある場合のみ該当者抽出）
-      if (selectedGrades.size > 0) {
-        filtered = filtered.filter(item => selectedGrades.has(item.grade));
-      }
+  const evRows = [
+    ['最終更新日時', stampText, '', ''],
+    ['No', '申し込み名称', 'フォルダID', '作成日時']
+  ];
 
-      // 3. 並び替え
-      if (sortBy === "name") {
-        filtered.sort((a, b) => (a.name || "").localeCompare(b.name || "", "ja"));
-      } else {
-        filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      }
+  events.forEach((ev, idx) => {
+    evRows.push([
+      idx + 1,
+      ev.name || ev.title || '',
+      ev.id || '',
+      formatTimestampJst(ev.createdAt)
+    ]);
+  });
 
-      return filtered;
-    }
+  evSheet.getRange(1, 1, evRows.length, 4).setValues(evRows);
+}
 
-    function renderSubmissionsTable() {
-      const list = getFilteredAndSortedSubmissions();
-      const tbody = $("submissions-tbody");
-      tbody.innerHTML = "";
+function toEpochMs(val) {
+  if (!val) return 0;
+  if (typeof val === 'number') return val;
+  const parsed = Date.parse(val);
+  return isNaN(parsed) ? 0 : parsed;
+}
 
-      $("detail-count").textContent = list.length;
-
-      // 抽出条件サマリー更新
-      const catText = filterCategory === "ALL" ? "全種目" : `種目:${filterCategory}`;
-      const gradeText = selectedGrades.size === 0 ? "全学年" : `学年:${GRADES.filter(g => selectedGrades.has(g)).join("・")}`;
-      const sortText = sortBy === "name" ? "名前順" : "申込順";
-      $("detail-filter-summary").textContent = `表示条件: ${catText} / ${gradeText}（${sortText}）`;
-
-      if (list.length === 0) {
-        $("submissions-empty").classList.remove("hidden");
-        return;
-      }
-      $("submissions-empty").classList.add("hidden");
-
-      list.forEach((item, idx) => {
-        const badgeColor =
-          item.category === "形" ? "bg-sky-100 text-sky-700" :
-          item.category === "組手" ? "bg-amber-100 text-amber-700" :
-          "bg-purple-100 text-purple-700";
-
-        const tr = document.createElement("tr");
-        tr.className = "hover:bg-slate-50 transition";
-        tr.innerHTML = `
-          <td class="py-3 px-4 text-center font-medium text-slate-500">${idx + 1}</td>
-          <td class="py-3 px-4 font-bold text-slate-800 whitespace-nowrap">${escapeHtml(item.name)}</td>
-          <td class="py-3 px-4 whitespace-nowrap font-medium">${escapeHtml(item.grade)}</td>
-          <td class="py-3 px-4 whitespace-nowrap">${escapeHtml(item.gender)}</td>
-          <td class="py-3 px-4 whitespace-nowrap">${escapeHtml(item.dob)}</td>
-          <td class="py-3 px-4 whitespace-nowrap">
-            <span class="inline-block px-2.5 py-0.5 rounded-md text-xs font-bold ${badgeColor}">${escapeHtml(item.category)}</span>
-          </td>
-          <td class="py-3 px-4 min-w-[180px]">${escapeHtml(item.address)}</td>
-          <td class="py-3 px-4 whitespace-nowrap">${escapeHtml(item.phone)}</td>
-          <td class="py-3 px-4 text-center no-print">
-            <button type="button" class="btn-del-sub text-slate-400 hover:text-red-600 p-1 rounded" title="削除">
-              <i data-lucide="trash-2" class="w-4 h-4"></i>
-            </button>
-          </td>
-        `;
-        tr.querySelector(".btn-del-sub").addEventListener("click", () => deleteSubmission(item));
-        tbody.appendChild(tr);
-      });
-      lucide.createIcons();
-    }
-
-    async function deleteSubmission(item) {
-      if (!confirm(`「${item.name}」さんのデータを削除しますか？`)) return;
-      const localSubs = JSON.parse(localStorage.getItem(STORAGE_LOCAL_SUBS) || "[]").filter(s => s.id !== item.id);
-      localStorage.setItem(STORAGE_LOCAL_SUBS, JSON.stringify(localSubs));
-      currentSubmissions = currentSubmissions.filter(s => s.id !== item.id);
-      renderSubmissionsTable();
-
-      try {
-        await deleteDoc(doc(db, "submissions", item.id));
-      } catch (err) {
-        console.warn("Firestore申込削除エラー:", err);
-      }
-    }
-
-    // ==================== Excel & PDF 保存 ====================
-    $("btn-export-excel").addEventListener("click", () => {
-      const list = getFilteredAndSortedSubmissions();
-      if (list.length === 0) {
-        alert("出力するデータがありません。");
-        return;
-      }
-
-      const rows = list.map((item, idx) => ({
-        "No": idx + 1,
-        "お名前": item.name,
-        "学年": item.grade,
-        "性別": item.gender,
-        "生年月日": item.dob,
-        "種目": item.category,
-        "住所": item.address,
-        "連絡先": item.phone
-      }));
-
-      const worksheet = XLSX.utils.json_to_sheet(rows);
-      worksheet["!cols"] = [
-        { wch: 5 }, { wch: 18 }, { wch: 8 }, { wch: 8 },
-        { wch: 14 }, { wch: 10 }, { wch: 32 }, { wch: 16 }
-      ];
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "申込一覧");
-
-      const safeTitle = (currentFolder?.name || "申し込み一覧").replace(/[\\/:*?"<>|]/g, "_");
-      XLSX.writeFile(workbook, `${safeTitle}.xlsx`);
-    });
-
-    $("btn-export-pdf").addEventListener("click", () => {
-      const list = getFilteredAndSortedSubmissions();
-      if (list.length === 0) {
-        alert("出力するデータがありません。");
-        return;
-      }
-      window.print();
-    });
-
-    // ==================== QRコード・URLモーダル＆プレビュー ====================
-    function openQrModal(ev) {
-      activeQrEvent = ev;
-      $("qr-modal-title").textContent = ev.name;
-      $("copy-feedback").classList.add("hidden");
-
-      const baseUrl = window.location.href.split("?")[0];
-      const shareUrl = `${baseUrl}?event=${encodeURIComponent(ev.id)}`;
-      $("qr-url-input").value = shareUrl;
-
-      const qrContainer = $("qr-code-container");
-      qrContainer.innerHTML = "";
-      new QRCode(qrContainer, {
-        text: shareUrl,
-        width: 180,
-        height: 180,
-        colorDark: "#0f172a",
-        colorLight: "#ffffff",
-        correctLevel: QRCode.CorrectLevel.M
-      });
-
-      $("modal-qr").classList.remove("hidden");
-      lucide.createIcons();
-    }
-
-    $("btn-copy-url").addEventListener("click", async () => {
-      const urlVal = $("qr-url-input").value;
-      try {
-        await navigator.clipboard.writeText(urlVal);
-        $("copy-feedback").classList.remove("hidden");
-      } catch {
-        $("qr-url-input").select();
-        document.execCommand("copy");
-        $("copy-feedback").classList.remove("hidden");
-      }
-    });
-
-    $("btn-download-qr").addEventListener("click", () => {
-      const canvas = $("qr-code-container").querySelector("canvas");
-      const img = $("qr-code-container").querySelector("img");
-      const dataUrl = canvas ? canvas.toDataURL("image/png") : (img ? img.src : null);
-      if (!dataUrl) return;
-
-      const link = document.createElement("a");
-      link.href = dataUrl;
-      link.download = `QR_${(activeQrEvent?.name || "event").replace(/[\\/:*?"<>|]/g, "_")}.png`;
-      link.click();
-    });
-
-    // プレビュー表示ボタン（URL遷移なしでフォーム画面へ切替）
-    $("btn-preview-form").addEventListener("click", () => {
-      if (!activeQrEvent) return;
-      $("modal-qr").classList.add("hidden");
-      openApplicantView(activeQrEvent.id, true);
-    });
-
-    // ==================== パスワード設定モーダル ====================
-    $("btn-open-settings").addEventListener("click", () => {
-      $("inp-new-password").value = adminPassword;
-      $("modal-settings").classList.remove("hidden");
-    });
-
-    $("form-change-password").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const newPw = $("inp-new-password").value.trim();
-      if (newPw.length < 4) return;
-
-      adminPassword = newPw;
-      localStorage.setItem(STORAGE_PW_KEY, newPw);
-      $("modal-settings").classList.add("hidden");
-      alert("管理者パスワードを変更しました。");
-
-      try {
-        await setDoc(doc(db, "settings", "admin"), { password: newPw }, { merge: true });
-      } catch (err) {
-        console.warn("Firestoreパスワード保存エラー:", err);
-      }
-    });
-
-    // 共通モーダル閉じるボタン
-    document.querySelectorAll(".close-modal").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        btn.closest(".fixed").classList.add("hidden");
-      });
-    });
-
-    function escapeHtml(str) {
-      if (!str) return "";
-      return String(str)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-  </script>
-</body>
-</html>
+function formatTimestampJst(val) {
+  const ms = toEpochMs(val);
+  if (!ms) return '';
+  return Utilities.formatDate(new Date(ms), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+}

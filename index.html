@@ -38,11 +38,13 @@
       events: [],
       submissions: [],
       isAuthenticated: false,
-      activeTab: "list", // "list" | "formCheck" | "folders"
+      activeView: "folders", // "folders" | "list" | "formCheck"
       selectedFolderId: "",
+      isFilterPanelOpen: false,
+      sortBy: "createdAt_desc",
       selectedGrades: new Set(),
-      selectedCategories: new Set(),
-      searchKeyword: ""
+      selectedGenders: new Set(),
+      selectedCategories: new Set()
     };
 
     function showToast(message, type = "info") {
@@ -54,13 +56,13 @@
           : type === "success"
           ? "bg-emerald-600 text-white"
           : "bg-slate-800 text-white";
-      toast.className = `${bg} px-4 py-3 rounded-xl shadow-lg text-sm font-medium transition-opacity duration-300`;
+      toast.className = `${bg} px-4 py-2.5 rounded-xl shadow-lg text-xs sm:text-sm font-medium transition-opacity duration-300`;
       toast.textContent = message;
       container.appendChild(toast);
       setTimeout(() => {
         toast.style.opacity = "0";
         setTimeout(() => toast.remove(), 300);
-      }, 3200);
+      }, 2800);
     }
 
     function escapeHtml(str) {
@@ -72,10 +74,17 @@
         .replace(/'/g, "&#39;");
     }
 
+    function toEpoch(ts) {
+      if (!ts) return 0;
+      if (typeof ts === "number") return ts;
+      const d = new Date(ts);
+      return isNaN(d.getTime()) ? 0 : d.getTime();
+    }
+
     function formatDateTime(ts) {
-      if (!ts) return "";
-      const d = typeof ts === "number" ? new Date(ts) : new Date(ts);
-      if (isNaN(d.getTime())) return String(ts);
+      const ms = toEpoch(ts);
+      if (!ms) return "";
+      const d = new Date(ms);
       const pad = (n) => String(n).padStart(2, "0");
       return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
@@ -85,326 +94,62 @@
       return `"${s.replace(/"/g, '""')}"`;
     }
 
-    function getBaseFormUrl() {
+    function getFormUrl() {
       const base = `${window.location.origin}${window.location.pathname}`;
-      if (state.selectedFolderId) {
-        return `${base}?eventId=${encodeURIComponent(state.selectedFolderId)}`;
-      }
-      return base;
+      return state.selectedFolderId
+        ? `${base}?eventId=${encodeURIComponent(state.selectedFolderId)}`
+        : base;
     }
 
-    function ensureSelectedFolder() {
-      if (state.events.length === 0) {
-        state.selectedFolderId = "";
-        return;
-      }
-      const exists = state.events.some((e) => e.id === state.selectedFolderId);
-      if (!exists) {
-        const params = new URLSearchParams(window.location.search);
-        const paramEventId = params.get("eventId");
-        if (paramEventId && state.events.some((e) => e.id === paramEventId)) {
-          state.selectedFolderId = paramEventId;
-        } else {
-          state.selectedFolderId = state.events[0].id;
-        }
-      }
-    }
-
-    function getFolderSubmissions() {
+    function getFolderItems() {
       if (!state.selectedFolderId) return [];
       return state.submissions.filter((item) => item.eventId === state.selectedFolderId);
     }
 
-    function renderFolderSelectors() {
-      ensureSelectedFolder();
-      const listSelect = document.getElementById("listFolderSelect");
-      const formCheckSelect = document.getElementById("formCheckFolderSelect");
-
-      const optionsHtml =
-        state.events.length === 0
-          ? `<option value="">フォルダがありません（フォルダ管理から作成）</option>`
-          : state.events
-              .map((ev) => {
-                const count = state.submissions.filter((s) => s.eventId === ev.id).length;
-                const selected = ev.id === state.selectedFolderId ? "selected" : "";
-                return `<option value="${escapeHtml(ev.id)}" ${selected}>${escapeHtml(ev.name || "(名称未設定)")}（${count}件）</option>`;
-              })
-              .join("");
-
-      if (listSelect) listSelect.innerHTML = optionsHtml;
-      if (formCheckSelect) formCheckSelect.innerHTML = optionsHtml;
-    }
-
-    function renderCheckboxes() {
-      const gradeBox = document.getElementById("gradeCheckboxGroup");
-      const categoryBox = document.getElementById("categoryCheckboxGroup");
-      if (!gradeBox || !categoryBox) return;
-
-      const folderItems = getFolderSubmissions();
-      const grades = Array.from(
-        new Set(folderItems.map((x) => (x.grade || "").trim()).filter(Boolean))
-      );
-      const categories = Array.from(
-        new Set(folderItems.map((x) => (x.category || "").trim()).filter(Boolean))
-      );
-
-      // 存在しなくなったチェック値を整理
-      Array.from(state.selectedGrades).forEach((g) => {
-        if (!grades.includes(g)) state.selectedGrades.delete(g);
-      });
-      Array.from(state.selectedCategories).forEach((c) => {
-        if (!categories.includes(c)) state.selectedCategories.delete(c);
-      });
-
-      if (grades.length === 0) {
-        gradeBox.innerHTML = `<span class="text-xs text-slate-400">学年データなし</span>`;
-      } else {
-        gradeBox.innerHTML = grades
-          .map((g) => {
-            const checked = state.selectedGrades.has(g) ? "checked" : "";
-            return `
-              <label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer hover:bg-slate-100">
-                <input type="checkbox" data-filter-grade="${escapeHtml(g)}" ${checked} class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                <span>${escapeHtml(g)}</span>
-              </label>
-            `;
-          })
-          .join("");
-      }
-
-      if (categories.length === 0) {
-        categoryBox.innerHTML = `<span class="text-xs text-slate-400">種目データなし</span>`;
-      } else {
-        categoryBox.innerHTML = categories
-          .map((c) => {
-            const checked = state.selectedCategories.has(c) ? "checked" : "";
-            return `
-              <label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer hover:bg-slate-100">
-                <input type="checkbox" data-filter-category="${escapeHtml(c)}" ${checked} class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                <span>${escapeHtml(c)}</span>
-              </label>
-            `;
-          })
-          .join("");
-      }
-
-      gradeBox.querySelectorAll("[data-filter-grade]").forEach((input) => {
-        input.addEventListener("change", () => {
-          const val = input.getAttribute("data-filter-grade");
-          if (input.checked) state.selectedGrades.add(val);
-          else state.selectedGrades.delete(val);
-          renderFilteredSubmissions();
-        });
-      });
-
-      categoryBox.querySelectorAll("[data-filter-category]").forEach((input) => {
-        input.addEventListener("change", () => {
-          const val = input.getAttribute("data-filter-category");
-          if (input.checked) state.selectedCategories.add(val);
-          else state.selectedCategories.delete(val);
-          renderFilteredSubmissions();
-        });
-      });
-    }
-
-    function getFilteredSubmissions() {
-      const folderItems = getFolderSubmissions();
-      const kw = state.searchKeyword.trim().toLowerCase();
-
-      return folderItems.filter((item) => {
-        const itemGrade = (item.grade || "").trim();
-        const itemCategory = (item.category || "").trim();
-
-        if (state.selectedGrades.size > 0 && !state.selectedGrades.has(itemGrade)) {
-          return false;
-        }
-        if (state.selectedCategories.size > 0 && !state.selectedCategories.has(itemCategory)) {
-          return false;
-        }
-        if (!kw) return true;
-
-        const target = [
-          item.name,
-          item.kana,
-          item.grade,
-          item.gender,
-          item.birthDate,
-          item.category,
-          item.address,
-          item.phone
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        return target.includes(kw);
-      });
-    }
-
-    function renderFilteredSubmissions() {
-      const tbody = document.getElementById("submissionsTableBody");
-      const countEl = document.getElementById("filteredCountLabel");
-      const folderTitleEl = document.getElementById("activeFolderTitle");
-      if (!tbody) return;
-
-      const currentFolder = state.events.find((e) => e.id === state.selectedFolderId);
-      if (folderTitleEl) {
-        folderTitleEl.textContent = currentFolder
-          ? `確認フォルダ：${currentFolder.name}`
-          : "確認フォルダ：未選択";
-      }
-
-      const filtered = getFilteredSubmissions();
-      if (countEl) {
-        countEl.textContent = `${filtered.length}件表示`;
-      }
-
-      if (!state.selectedFolderId) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="11" class="px-4 py-8 text-center text-sm text-slate-500">
-              確認フォルダが選択されていません。「フォルダ管理」からフォルダを作成してください。
-            </td>
-          </tr>
-        `;
-        return;
-      }
-
-      if (filtered.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="11" class="px-4 py-8 text-center text-sm text-slate-500">
-              選択中の条件に該当する申込者はありません。
-            </td>
-          </tr>
-        `;
-        return;
-      }
-
-      tbody.innerHTML = filtered
-        .map((item, idx) => `
-          <tr class="hover:bg-slate-50 border-b border-slate-100 text-xs sm:text-sm">
-            <td class="px-3 py-2.5 text-slate-500 whitespace-nowrap">${idx + 1}</td>
-            <td class="px-3 py-2.5 font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(item.name || "")}</td>
-            <td class="px-3 py-2.5 text-slate-600 whitespace-nowrap">${escapeHtml(item.kana || "")}</td>
-            <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.grade || "")}</td>
-            <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.gender || "")}</td>
-            <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.birthDate || "")}</td>
-            <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.category || "")}</td>
-            <td class="px-3 py-2.5 text-slate-700 min-w-[180px]">${escapeHtml(item.address || "")}</td>
-            <td class="px-3 py-2.5 text-slate-700 whitespace-nowrap">${escapeHtml(item.phone || "")}</td>
-            <td class="px-3 py-2.5 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
-            <td class="px-3 py-2.5 whitespace-nowrap">
-              <button
-                type="button"
-                data-delete-sub="${escapeHtml(item.id)}"
-                class="px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg border border-red-200"
-              >
-                削除
-              </button>
-            </td>
-          </tr>
-        `)
-        .join("");
-
-      tbody.querySelectorAll("[data-delete-sub]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const id = btn.getAttribute("data-delete-sub");
-          if (!confirm("この申込者データを削除しますか？")) return;
-          try {
-            await deleteDoc(doc(db, "submissions", id));
-            showToast("申込者データを削除しました", "success");
-          } catch (err) {
-            console.error(err);
-            showToast("削除に失敗しました", "error");
-          }
-        });
-      });
-    }
-
-    function renderFormCheckSection() {
-      const urlInput = document.getElementById("formShareUrlInput");
-      const qrContainer = document.getElementById("formQrCodeBox");
-      const folderLabel = document.getElementById("formCheckSelectedFolderLabel");
-
-      const currentFolder = state.events.find((e) => e.id === state.selectedFolderId);
-      if (folderLabel) {
-        folderLabel.textContent = currentFolder
-          ? `対象フォルダ：${currentFolder.name}`
-          : "対象フォルダ：未選択";
-      }
-
-      const targetUrl = getBaseFormUrl();
-      if (urlInput) {
-        urlInput.value = targetUrl;
-      }
-
-      if (qrContainer) {
-        qrContainer.innerHTML = "";
-        if (typeof QRCode !== "undefined") {
-          new QRCode(qrContainer, {
-            text: targetUrl,
-            width: 176,
-            height: 176,
-            correctLevel: QRCode.CorrectLevel.M
-          });
-        }
-      }
-    }
-
-    function renderFoldersManager() {
+    function renderFoldersView() {
       const listEl = document.getElementById("foldersListBox");
       if (!listEl) return;
 
       if (state.events.length === 0) {
-        listEl.innerHTML = `<p class="text-sm text-slate-500">申し込みフォルダはまだありません。</p>`;
+        listEl.innerHTML = `<p class="text-sm text-slate-500 py-2">フォルダがありません。</p>`;
         return;
       }
 
       listEl.innerHTML = state.events
         .map((ev) => {
           const count = state.submissions.filter((s) => s.eventId === ev.id).length;
-          const isCurrent = ev.id === state.selectedFolderId;
           return `
-            <div class="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50 border ${isCurrent ? "border-blue-400" : "border-slate-200"}">
-              <div>
-                <div class="font-semibold text-slate-900">
-                  ${escapeHtml(ev.name || "")}
-                  ${isCurrent ? `<span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">選択中</span>` : ""}
-                </div>
-                <div class="text-xs text-slate-500">ID: ${escapeHtml(ev.id)} / 申込数: ${count}件</div>
-              </div>
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  data-select-folder="${escapeHtml(ev.id)}"
-                  class="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200"
-                >
-                  このフォルダで確認
-                </button>
-                <button
-                  type="button"
-                  data-delete-folder="${escapeHtml(ev.id)}"
-                  class="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg border border-red-200"
-                >
-                  削除
-                </button>
-              </div>
+            <div class="flex items-center justify-between gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 transition">
+              <button
+                type="button"
+                data-open-folder="${escapeHtml(ev.id)}"
+                class="flex-1 text-left flex items-center justify-between gap-2 py-1"
+              >
+                <span class="font-semibold text-sm text-slate-900">${escapeHtml(ev.name || "")}</span>
+                <span class="text-xs px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-700 font-medium whitespace-nowrap">
+                  ${count}件
+                </span>
+              </button>
+              <button
+                type="button"
+                data-delete-folder="${escapeHtml(ev.id)}"
+                class="px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg border border-red-200"
+              >
+                削除
+              </button>
             </div>
           `;
         })
         .join("");
 
-      listEl.querySelectorAll("[data-select-folder]").forEach((btn) => {
+      // フォルダを押したら自動的に一覧を表示
+      listEl.querySelectorAll("[data-open-folder]").forEach((btn) => {
         btn.addEventListener("click", () => {
-          state.selectedFolderId = btn.getAttribute("data-select-folder");
+          state.selectedFolderId = btn.getAttribute("data-open-folder");
           state.selectedGrades.clear();
+          state.selectedGenders.clear();
           state.selectedCategories.clear();
-          renderFolderSelectors();
-          renderCheckboxes();
-          renderFilteredSubmissions();
-          renderFormCheckSection();
-          switchTab("list");
+          switchView("list");
         });
       });
 
@@ -412,9 +157,10 @@
         btn.addEventListener("click", async () => {
           const id = btn.getAttribute("data-delete-folder");
           const ev = state.events.find((x) => x.id === id);
-          if (!confirm(`フォルダ「${ev?.name || id}」を削除しますか？`)) return;
+          if (!confirm(`「${ev?.name || id}」を削除しますか？`)) return;
           try {
             await deleteDoc(doc(db, "events", id));
+            if (state.selectedFolderId === id) state.selectedFolderId = "";
             showToast("フォルダを削除しました", "success");
           } catch (err) {
             console.error(err);
@@ -424,101 +170,259 @@
       });
     }
 
-    function switchTab(tab) {
-      state.activeTab = tab;
+    function renderCheckGroups() {
+      const gradeEl = document.getElementById("gradeChecks");
+      const genderEl = document.getElementById("genderChecks");
+      const categoryEl = document.getElementById("categoryChecks");
+      if (!gradeEl || !genderEl || !categoryEl) return;
 
-      const secList = document.getElementById("sectionApplicantList");
-      const secFormCheck = document.getElementById("sectionFormCheck");
-      const secFolders = document.getElementById("sectionFolders");
+      const items = getFolderItems();
+      const grades = Array.from(new Set(items.map((x) => (x.grade || "").trim()).filter(Boolean)));
+      const genders = Array.from(new Set(items.map((x) => (x.gender || "").trim()).filter(Boolean)));
+      const categories = Array.from(new Set(items.map((x) => (x.category || "").trim()).filter(Boolean)));
 
-      const btnList = document.getElementById("tabList");
-      const btnFormCheck = document.getElementById("tabFormCheck");
-      const btnFolders = document.getElementById("tabFolders");
+      Array.from(state.selectedGrades).forEach((v) => {
+        if (!grades.includes(v)) state.selectedGrades.delete(v);
+      });
+      Array.from(state.selectedGenders).forEach((v) => {
+        if (!genders.includes(v)) state.selectedGenders.delete(v);
+      });
+      Array.from(state.selectedCategories).forEach((v) => {
+        if (!categories.includes(v)) state.selectedCategories.delete(v);
+      });
 
-      secList.classList.add("hidden");
-      secFormCheck.classList.add("hidden");
-      secFolders.classList.add("hidden");
+      const buildChips = (list, setObj, attrName, emptyText) => {
+        if (list.length === 0) return `<span class="text-xs text-slate-400">${emptyText}</span>`;
+        return list
+          .map((val) => {
+            const checked = setObj.has(val) ? "checked" : "";
+            return `
+              <label class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 cursor-pointer">
+                <input type="checkbox" ${attrName}="${escapeHtml(val)}" ${checked} class="rounded border-slate-300 text-blue-600" />
+                <span>${escapeHtml(val)}</span>
+              </label>
+            `;
+          })
+          .join("");
+      };
 
-      const inactiveClass = "px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200";
-      const activeClass = "px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-blue-600 text-white";
+      gradeEl.innerHTML = buildChips(grades, state.selectedGrades, "data-chk-grade", "なし");
+      genderEl.innerHTML = buildChips(genders, state.selectedGenders, "data-chk-gender", "なし");
+      categoryEl.innerHTML = buildChips(categories, state.selectedCategories, "data-chk-category", "なし");
 
-      btnList.className = inactiveClass;
-      btnFormCheck.className = inactiveClass;
-      btnFolders.className = inactiveClass;
+      gradeEl.querySelectorAll("[data-chk-grade]").forEach((el) => {
+        el.addEventListener("change", () => {
+          const v = el.getAttribute("data-chk-grade");
+          el.checked ? state.selectedGrades.add(v) : state.selectedGrades.delete(v);
+          renderListRows();
+        });
+      });
 
-      if (tab === "list") {
-        secList.classList.remove("hidden");
-        btnList.className = activeClass;
-        renderCheckboxes();
-        renderFilteredSubmissions();
-      } else if (tab === "formCheck") {
-        secFormCheck.classList.remove("hidden");
-        btnFormCheck.className = activeClass;
-        renderFormCheckSection();
-      } else if (tab === "folders") {
-        secFolders.classList.remove("hidden");
-        btnFolders.className = activeClass;
-        renderFoldersManager();
+      genderEl.querySelectorAll("[data-chk-gender]").forEach((el) => {
+        el.addEventListener("change", () => {
+          const v = el.getAttribute("data-chk-gender");
+          el.checked ? state.selectedGenders.add(v) : state.selectedGenders.delete(v);
+          renderListRows();
+        });
+      });
+
+      categoryEl.querySelectorAll("[data-chk-category]").forEach((el) => {
+        el.addEventListener("change", () => {
+          const v = el.getAttribute("data-chk-category");
+          el.checked ? state.selectedCategories.add(v) : state.selectedCategories.delete(v);
+          renderListRows();
+        });
+      });
+    }
+
+    function getFilteredAndSortedItems() {
+      const items = getFolderItems().filter((item) => {
+        const g = (item.grade || "").trim();
+        const sex = (item.gender || "").trim();
+        const cat = (item.category || "").trim();
+
+        if (state.selectedGrades.size > 0 && !state.selectedGrades.has(g)) return false;
+        if (state.selectedGenders.size > 0 && !state.selectedGenders.has(sex)) return false;
+        if (state.selectedCategories.size > 0 && !state.selectedCategories.has(cat)) return false;
+        return true;
+      });
+
+      return items.sort((a, b) => {
+        switch (state.sortBy) {
+          case "createdAt_asc":
+            return toEpoch(a.createdAt) - toEpoch(b.createdAt);
+          case "name_asc":
+            return String(a.name || "").localeCompare(String(b.name || ""), "ja");
+          case "grade_asc":
+            return String(a.grade || "").localeCompare(String(b.grade || ""), "ja");
+          case "createdAt_desc":
+          default:
+            return toEpoch(b.createdAt) - toEpoch(a.createdAt);
+        }
+      });
+    }
+
+    function renderListRows() {
+      const folder = state.events.find((e) => e.id === state.selectedFolderId);
+      const titleEl = document.getElementById("listFolderName");
+      const countEl = document.getElementById("listCountBadge");
+      const tbody = document.getElementById("listTableBody");
+
+      if (titleEl) titleEl.textContent = folder ? folder.name : "フォルダ未選択";
+
+      const rows = getFilteredAndSortedItems();
+      if (countEl) countEl.textContent = `${rows.length}件`;
+
+      if (!tbody) return;
+      if (rows.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="10" class="px-3 py-6 text-center text-xs sm:text-sm text-slate-500">
+              該当データがありません。
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = rows
+        .map((item, i) => `
+          <tr class="border-b border-slate-100 hover:bg-slate-50 text-xs sm:text-sm">
+            <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${i + 1}</td>
+            <td class="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(item.name || "")}</td>
+            <td class="px-3 py-2 text-slate-600 whitespace-nowrap">${escapeHtml(item.kana || "")}</td>
+            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.grade || "")}</td>
+            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.gender || "")}</td>
+            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.category || "")}</td>
+            <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.phone || "")}</td>
+            <td class="px-3 py-2 text-slate-700 min-w-[160px]">${escapeHtml(item.address || "")}</td>
+            <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
+            <td class="px-3 py-2 whitespace-nowrap">
+              <button
+                type="button"
+                data-del-item="${escapeHtml(item.id)}"
+                class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200"
+              >
+                削除
+              </button>
+            </td>
+          </tr>
+        `)
+        .join("");
+
+      tbody.querySelectorAll("[data-del-item]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-del-item");
+          if (!confirm("削除しますか？")) return;
+          try {
+            await deleteDoc(doc(db, "submissions", id));
+            showToast("削除しました", "success");
+          } catch (err) {
+            console.error(err);
+            showToast("削除に失敗しました", "error");
+          }
+        });
+      });
+    }
+
+    function renderFormCheckView() {
+      const folder = state.events.find((e) => e.id === state.selectedFolderId);
+      const label = document.getElementById("formCheckFolderBadge");
+      const urlInput = document.getElementById("formCheckUrlInput");
+      const qrBox = document.getElementById("formCheckQrBox");
+
+      if (label) {
+        label.textContent = folder ? `対象フォルダ：${folder.name}` : "対象フォルダ：未選択";
+      }
+
+      const url = getFormUrl();
+      if (urlInput) urlInput.value = url;
+
+      if (qrBox) {
+        qrBox.innerHTML = "";
+        if (typeof QRCode !== "undefined") {
+          new QRCode(qrBox, {
+            text: url,
+            width: 164,
+            height: 164,
+            correctLevel: QRCode.CorrectLevel.M
+          });
+        }
       }
     }
 
-    function applyAuthGate() {
-      const authGate = document.getElementById("authGateSection");
-      const mainApp = document.getElementById("mainAppSection");
+    function switchView(view) {
+      state.activeView = view;
+
+      const vFolders = document.getElementById("viewFolders");
+      const vList = document.getElementById("viewList");
+      const vFormCheck = document.getElementById("viewFormCheck");
+
+      const bFolders = document.getElementById("navFoldersBtn");
+      const bFormCheck = document.getElementById("navFormCheckBtn");
+
+      vFolders.classList.add("hidden");
+      vList.classList.add("hidden");
+      vFormCheck.classList.add("hidden");
+
+      const offStyle = "px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200";
+      const onStyle = "px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-blue-600 text-white";
+
+      bFolders.className = view === "folders" ? onStyle : offStyle;
+      bFormCheck.className = view === "formCheck" ? onStyle : offStyle;
+
+      if (view === "folders") {
+        vFolders.classList.remove("hidden");
+        renderFoldersView();
+      } else if (view === "list") {
+        vList.classList.remove("hidden");
+        renderCheckGroups();
+        renderListRows();
+      } else if (view === "formCheck") {
+        vFormCheck.classList.remove("hidden");
+        renderFormCheckView();
+      }
+    }
+
+    function applyGate() {
+      const gate = document.getElementById("gateSection");
+      const appBody = document.getElementById("appSection");
       if (state.isAuthenticated) {
-        authGate.classList.add("hidden");
-        mainApp.classList.remove("hidden");
-        renderFolderSelectors();
-        renderCheckboxes();
-        renderFilteredSubmissions();
-        renderFormCheckSection();
-        renderFoldersManager();
+        gate.classList.add("hidden");
+        appBody.classList.remove("hidden");
+        switchView(state.activeView || "folders");
       } else {
-        authGate.classList.remove("hidden");
-        mainApp.classList.add("hidden");
+        gate.classList.remove("hidden");
+        appBody.classList.add("hidden");
       }
     }
 
-    function exportJsonBackup() {
+    function exportJson() {
       const payload = {
         appName: "moushikomi-kanri",
         projectId: firebaseConfig.projectId,
         exportedAt: new Date().toISOString(),
-        counts: {
-          events: state.events.length,
-          submissions: state.submissions.length
-        },
         events: state.events,
         submissions: state.submissions
       };
-
       const now = new Date();
-      const pad = (n) => String(n).padStart(2, "0");
-      const fileName = `申し込みバックアップ_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.json`;
-
+      const p = (n) => String(n).padStart(2, "0");
+      const name = `申し込みバックアップ_${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}.json`;
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = fileName;
+      a.download = name;
       a.click();
       URL.revokeObjectURL(url);
-      showToast("JSONバックアップを保存しました", "success");
+      showToast("JSONを保存しました", "success");
     }
 
-    async function restoreJsonBackup(file) {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
+    async function restoreJson(file) {
+      const parsed = JSON.parse(await file.text());
       const eventsList = Array.isArray(parsed.events) ? parsed.events : [];
-      const submissionsList = Array.isArray(parsed.submissions) ? parsed.submissions : [];
-
-      if (eventsList.length === 0 && submissionsList.length === 0) {
-        throw new Error("復元できるデータが見つかりませんでした。");
-      }
-
-      if (!confirm(`JSONから復元しますか？\nフォルダ: ${eventsList.length}件 / 申込者: ${submissionsList.length}件`)) {
-        return;
-      }
+      const subsList = Array.isArray(parsed.submissions) ? parsed.submissions : [];
+      if (!confirm(`復元しますか？\nフォルダ: ${eventsList.length}件 / 申込: ${subsList.length}件`)) return;
 
       const ops = [];
       eventsList.forEach((ev) => {
@@ -527,7 +431,7 @@
           ops.push({ col: "events", id: String(id), data: rest });
         }
       });
-      submissionsList.forEach((sub) => {
+      subsList.forEach((sub) => {
         if (sub?.id) {
           const { id, ...rest } = sub;
           ops.push({ col: "submissions", id: String(id), data: rest });
@@ -541,616 +445,442 @@
         });
         await batch.commit();
       }
-
-      showToast("JSONバックアップから復元しました", "success");
+      showToast("復元しました", "success");
     }
 
     function exportCsv() {
-      const currentFolder = state.events.find((e) => e.id === state.selectedFolderId);
-      const rowsData = getFilteredSubmissions();
-      const headers = [
-        "No",
-        "確認フォルダ",
-        "氏名",
-        "フリガナ",
-        "学年",
-        "性別",
-        "生年月日",
-        "種目",
-        "住所",
-        "連絡先",
-        "申込日時"
-      ];
-      const rows = rowsData.map((item, idx) => [
-        idx + 1,
-        currentFolder?.name || item.eventName || "",
+      const folder = state.events.find((e) => e.id === state.selectedFolderId);
+      const rows = getFilteredAndSortedItems();
+      const headers = ["No", "フォルダ", "氏名", "フリガナ", "学年", "性別", "種目", "連絡先", "住所", "申込日時"];
+      const lines = rows.map((item, i) => [
+        i + 1,
+        folder?.name || "",
         item.name || "",
         item.kana || "",
         item.grade || "",
         item.gender || "",
-        item.birthDate || "",
         item.category || "",
-        item.address || "",
         item.phone || "",
+        item.address || "",
         formatDateTime(item.createdAt)
       ].map(escapeCsv).join(","));
 
-      const csv = "\uFEFF" + [headers.map(escapeCsv).join(","), ...rows].join("\r\n");
+      const csv = "\uFEFF" + [headers.map(escapeCsv).join(","), ...lines].join("\r\n");
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `申込者一覧_${currentFolder?.name || "folder"}_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `${folder?.name || "一覧"}_${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       showToast("CSVを出力しました", "success");
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-      // パスワード入力ゲート
-      document.getElementById("passwordGateForm").addEventListener("submit", (e) => {
+      document.getElementById("gateForm").addEventListener("submit", (e) => {
         e.preventDefault();
-        const inputVal = document.getElementById("gatePasswordInput").value;
-        if (inputVal === ADMIN_PASSCODE) {
+        if (document.getElementById("gatePassInput").value === ADMIN_PASSCODE) {
           state.isAuthenticated = true;
-          document.getElementById("gatePasswordInput").value = "";
-          applyAuthGate();
-          switchTab("list");
-          showToast("認証が完了しました", "success");
+          state.activeView = "folders";
+          document.getElementById("gatePassInput").value = "";
+          applyGate();
         } else {
-          showToast("パスワードが正しくありません", "error");
+          showToast("パスワードが違います", "error");
         }
       });
 
-      document.getElementById("lockScreenBtn").addEventListener("click", () => {
+      document.getElementById("lockBtn").addEventListener("click", () => {
         state.isAuthenticated = false;
-        applyAuthGate();
-        showToast("画面をロックしました", "info");
+        applyGate();
       });
 
-      // タブ切り替え
-      document.getElementById("tabList").addEventListener("click", () => switchTab("list"));
-      document.getElementById("tabFormCheck").addEventListener("click", () => switchTab("formCheck"));
-      document.getElementById("tabFolders").addEventListener("click", () => switchTab("folders"));
+      document.getElementById("navFoldersBtn").addEventListener("click", () => switchView("folders"));
+      document.getElementById("navFormCheckBtn").addEventListener("click", () => switchView("formCheck"));
+      document.getElementById("backToFoldersBtn").addEventListener("click", () => switchView("folders"));
 
-      // 確認フォルダ変更（申込者一覧側）
-      document.getElementById("listFolderSelect").addEventListener("change", (e) => {
-        state.selectedFolderId = e.target.value;
+      // 並び替え・条件指定ボタンの開閉
+      document.getElementById("toggleFilterBtn").addEventListener("click", () => {
+        state.isFilterPanelOpen = !state.isFilterPanelOpen;
+        const panel = document.getElementById("filterPanel");
+        panel.classList.toggle("hidden", !state.isFilterPanelOpen);
+      });
+
+      document.getElementById("sortSelect").addEventListener("change", (e) => {
+        state.sortBy = e.target.value;
+        renderListRows();
+      });
+
+      document.getElementById("resetFilterBtn").addEventListener("click", () => {
+        state.sortBy = "createdAt_desc";
+        document.getElementById("sortSelect").value = "createdAt_desc";
         state.selectedGrades.clear();
+        state.selectedGenders.clear();
         state.selectedCategories.clear();
-        renderCheckboxes();
-        renderFilteredSubmissions();
-        renderFormCheckSection();
-        renderFoldersManager();
+        renderCheckGroups();
+        renderListRows();
       });
 
-      // 確認フォルダ変更（入力フォームの確認側）
-      document.getElementById("formCheckFolderSelect").addEventListener("change", (e) => {
-        state.selectedFolderId = e.target.value;
-        state.selectedGrades.clear();
-        state.selectedCategories.clear();
-        renderFolderSelectors();
-        renderCheckboxes();
-        renderFilteredSubmissions();
-        renderFormCheckSection();
-        renderFoldersManager();
-      });
-
-      document.getElementById("clearCheckboxBtn").addEventListener("click", () => {
-        state.selectedGrades.clear();
-        state.selectedCategories.clear();
-        document.getElementById("listSearchInput").value = "";
-        state.searchKeyword = "";
-        renderCheckboxes();
-        renderFilteredSubmissions();
-      });
-
-      document.getElementById("listSearchInput").addEventListener("input", (e) => {
-        state.searchKeyword = e.target.value;
-        renderFilteredSubmissions();
+      // フォルダ作成
+      document.getElementById("createFolderForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const input = document.getElementById("newFolderInput");
+        const name = input.value.trim();
+        if (!name) return;
+        try {
+          await addDoc(collection(db, "events"), { name, createdAt: Date.now() });
+          input.value = "";
+          showToast("フォルダを作成しました", "success");
+        } catch (err) {
+          console.error(err);
+          showToast("作成に失敗しました", "error");
+        }
       });
 
       // URLコピー
-      document.getElementById("copyFormUrlBtn").addEventListener("click", async () => {
-        const val = document.getElementById("formShareUrlInput").value;
+      document.getElementById("copyUrlBtn").addEventListener("click", async () => {
+        const val = document.getElementById("formCheckUrlInput").value;
         try {
           await navigator.clipboard.writeText(val);
           showToast("URLをコピーしました", "success");
         } catch {
-          const inp = document.getElementById("formShareUrlInput");
+          const inp = document.getElementById("formCheckUrlInput");
           inp.select();
           document.execCommand("copy");
           showToast("URLをコピーしました", "success");
         }
       });
 
-      // 「入力フォームの確認」画面からの手動入力＆保存
-      document.getElementById("manualEntryForm").addEventListener("submit", async (e) => {
+      // 手動入力保存
+      document.getElementById("manualSaveForm").addEventListener("submit", async (e) => {
         e.preventDefault();
         if (!state.selectedFolderId) {
-          showToast("先に対象となる申し込みフォルダを選択してください", "error");
+          showToast("先にフォルダを選択してください", "error");
           return;
         }
-
-        const folderObj = state.events.find((x) => x.id === state.selectedFolderId);
-        const btn = document.getElementById("manualSaveBtn");
+        const folder = state.events.find((x) => x.id === state.selectedFolderId);
+        const btn = document.getElementById("manualSubmitBtn");
         btn.disabled = true;
-        btn.textContent = "保存中...";
-
         try {
           await addDoc(collection(db, "submissions"), {
             eventId: state.selectedFolderId,
-            eventName: folderObj?.name || "",
-            name: document.getElementById("manualName").value.trim(),
-            kana: document.getElementById("manualKana").value.trim(),
-            grade: document.getElementById("manualGrade").value.trim(),
-            gender: document.getElementById("manualGender").value,
-            birthDate: document.getElementById("manualBirthDate").value,
-            category: document.getElementById("manualCategory").value.trim(),
-            address: document.getElementById("manualAddress").value.trim(),
-            phone: document.getElementById("manualPhone").value.trim(),
+            eventName: folder?.name || "",
+            name: document.getElementById("mName").value.trim(),
+            kana: document.getElementById("mKana").value.trim(),
+            grade: document.getElementById("mGrade").value.trim(),
+            gender: document.getElementById("mGender").value,
+            category: document.getElementById("mCategory").value.trim(),
+            phone: document.getElementById("mPhone").value.trim(),
+            address: document.getElementById("mAddress").value.trim(),
             createdAt: Date.now(),
-            source: "manual_admin"
+            source: "manual"
           });
-
           e.target.reset();
-          showToast(`手動入力データを「${folderObj?.name || "フォルダ"}」に保存しました`, "success");
+          showToast("保存しました", "success");
         } catch (err) {
           console.error(err);
           showToast("保存に失敗しました", "error");
         } finally {
           btn.disabled = false;
-          btn.textContent = "手動入力データを保存";
         }
       });
 
-      // フォルダ作成
-      document.getElementById("createFolderForm").addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const input = document.getElementById("newFolderNameInput");
-        const name = input.value.trim();
-        if (!name) return;
-
-        try {
-          const docRef = await addDoc(collection(db, "events"), {
-            name: name,
-            createdAt: Date.now()
-          });
-          state.selectedFolderId = docRef.id;
-          input.value = "";
-          showToast(`フォルダ「${name}」を作成しました`, "success");
-        } catch (err) {
-          console.error(err);
-          showToast("フォルダ作成に失敗しました", "error");
-        }
-      });
-
-      // JSON保存・復元・CSV
-      document.getElementById("exportJsonBtn").addEventListener("click", exportJsonBackup);
+      document.getElementById("exportJsonBtn").addEventListener("click", exportJson);
       document.getElementById("exportCsvBtn").addEventListener("click", exportCsv);
 
-      const restoreInput = document.getElementById("restoreJsonInput");
+      const fileInput = document.getElementById("restoreJsonFile");
       document.getElementById("restoreJsonBtn").addEventListener("click", () => {
-        restoreInput.value = "";
-        restoreInput.click();
+        fileInput.value = "";
+        fileInput.click();
       });
-      restoreInput.addEventListener("change", async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+      fileInput.addEventListener("change", async (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
         try {
-          await restoreJsonBackup(file);
+          await restoreJson(f);
         } catch (err) {
           console.error(err);
-          showToast(`復元に失敗しました: ${err.message || err}`, "error");
+          showToast("復元に失敗しました", "error");
         }
       });
 
-      // Firestore リアルタイム購読
-      onSnapshot(
-        query(collection(db, "events"), orderBy("createdAt", "desc")),
-        (snap) => {
-          state.events = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          if (state.isAuthenticated) {
-            renderFolderSelectors();
-            renderCheckboxes();
-            renderFilteredSubmissions();
-            renderFormCheckSection();
-            renderFoldersManager();
-          }
-        },
-        (err) => {
-          console.error("events購読エラー:", err);
-          showToast("フォルダデータの読み込みに失敗しました", "error");
+      onSnapshot(query(collection(db, "events"), orderBy("createdAt", "desc")), (snap) => {
+        state.events = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        if (state.isAuthenticated) {
+          renderFoldersView();
+          renderListRows();
+          renderFormCheckView();
         }
-      );
+      });
 
-      onSnapshot(
-        query(collection(db, "submissions"), orderBy("createdAt", "desc")),
-        (snap) => {
-          state.submissions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          if (state.isAuthenticated) {
-            renderFolderSelectors();
-            renderCheckboxes();
-            renderFilteredSubmissions();
-            renderFoldersManager();
-          }
-        },
-        (err) => {
-          console.error("submissions購読エラー:", err);
-          showToast("申込者データの読み込みに失敗しました", "error");
+      onSnapshot(query(collection(db, "submissions"), orderBy("createdAt", "desc")), (snap) => {
+        state.submissions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        if (state.isAuthenticated) {
+          renderFoldersView();
+          renderCheckGroups();
+          renderListRows();
         }
-      );
+      });
 
-      // 初期状態はパスワード入力画面
-      applyAuthGate();
+      applyGate();
     });
   </script>
 </head>
 <body class="bg-slate-100 text-slate-900 min-h-screen">
   <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
 
-  <!-- 1. 最初に表示されるパスワード入力画面 -->
-  <section id="authGateSection" class="min-h-screen flex items-center justify-center p-4">
-    <div class="w-full max-w-md bg-white rounded-2xl shadow-md border border-slate-200 p-6 sm:p-8">
-      <div class="text-center mb-6">
-        <h1 class="text-xl font-bold text-slate-900">申し込み管理システム</h1>
-        <p class="text-xs sm:text-sm text-slate-500 mt-1">アクセスするにはパスワードを入力してください</p>
-      </div>
-      <form id="passwordGateForm" class="space-y-4">
-        <div>
-          <label for="gatePasswordInput" class="block text-sm font-semibold text-slate-700 mb-1.5">
-            パスワード入力
-          </label>
-          <input
-            id="gatePasswordInput"
-            type="password"
-            required
-            autofocus
-            placeholder="パスワードを入力"
-            class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+  <!-- パスワード入力画面 -->
+  <section id="gateSection" class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-sm bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
+      <h1 class="text-lg font-bold text-center text-slate-900">パスワード入力</h1>
+      <form id="gateForm" class="space-y-3">
+        <input
+          id="gatePassInput"
+          type="password"
+          required
+          autofocus
+          placeholder="パスワード"
+          class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
         <button
           type="submit"
-          class="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm shadow-sm transition"
+          class="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold"
         >
-          認証して開く
+          開く
         </button>
       </form>
     </div>
   </section>
 
-  <!-- 2. 認証後に表示される管理システム本体 -->
-  <div id="mainAppSection" class="hidden min-h-screen flex flex-col">
+  <!-- 管理画面本体 -->
+  <div id="appSection" class="hidden min-h-screen flex flex-col">
     <header class="bg-white border-b border-slate-200 sticky top-0 z-30">
-      <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 class="text-lg sm:text-xl font-bold text-slate-900">申し込み管理システム</h1>
-          <p class="text-xs text-slate-500">確認フォルダ別一覧・入力フォームの確認・手動入力保存</p>
-        </div>
-
-        <nav class="flex flex-wrap items-center gap-2">
+      <div class="max-w-5xl mx-auto px-4 py-2.5 flex items-center justify-between gap-2">
+        <h1 class="text-base sm:text-lg font-bold text-slate-900">申し込み管理</h1>
+        <div class="flex items-center gap-1.5 sm:gap-2">
           <button
-            id="tabList"
+            id="navFoldersBtn"
             type="button"
-            class="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-blue-600 text-white"
+            class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-blue-600 text-white"
           >
-            申込者一覧（確認フォルダ）
+            フォルダ
           </button>
           <button
-            id="tabFormCheck"
+            id="navFormCheckBtn"
             type="button"
-            class="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
+            class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
           >
             入力フォームの確認
           </button>
           <button
-            id="tabFolders"
+            id="lockBtn"
             type="button"
-            class="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200"
-          >
-            フォルダ管理
-          </button>
-          <button
-            id="lockScreenBtn"
-            type="button"
-            class="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-800 hover:bg-slate-900 text-white"
+            class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-slate-800 text-white"
           >
             ロック
           </button>
-        </nav>
+        </div>
       </div>
     </header>
 
-    <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
-      <!-- 申込者一覧（確認フォルダ内＋学年・種目チェック絞り込み） -->
-      <section id="sectionApplicantList" class="space-y-5">
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
-          <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div>
-              <h2 id="activeFolderTitle" class="text-lg font-bold text-slate-900">確認フォルダ</h2>
-              <p class="text-xs text-slate-500">確認したいフォルダを選び、学年・種目にチェックを入れて該当者のみを表示します。</p>
-            </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <button
-                id="exportJsonBtn"
-                type="button"
-                class="px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white"
-              >
-                JSON保存
-              </button>
-              <button
-                id="restoreJsonBtn"
-                type="button"
-                class="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white"
-              >
-                JSON復元
-              </button>
-              <input id="restoreJsonInput" type="file" accept=".json,application/json" class="hidden" />
-              <button
-                id="exportCsvBtn"
-                type="button"
-                class="px-3 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                CSV出力
-              </button>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-            <div>
-              <label for="listFolderSelect" class="block text-xs font-semibold text-slate-700 mb-1">
-                確認フォルダを選択
-              </label>
-              <select
-                id="listFolderSelect"
-                class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              ></select>
-            </div>
-            <div>
-              <label for="listSearchInput" class="block text-xs font-semibold text-slate-700 mb-1">
-                キーワード検索（氏名・住所・連絡先など）
-              </label>
-              <input
-                id="listSearchInput"
-                type="search"
-                placeholder="検索ワードを入力"
-                class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-
-          <!-- 学年・種目チェックボックス絞り込み -->
-          <div class="border-t border-slate-100 pt-4 space-y-3">
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-xs font-bold text-slate-700">表示条件チェック（チェック項目に該当する人のみ表示）</span>
-              <button
-                id="clearCheckboxBtn"
-                type="button"
-                class="text-xs font-semibold text-blue-600 hover:underline"
-              >
-                チェック解除
-              </button>
-            </div>
-
-            <div class="space-y-2">
-              <div class="text-xs font-semibold text-slate-600">学年</div>
-              <div id="gradeCheckboxGroup" class="flex flex-wrap gap-2"></div>
-            </div>
-
-            <div class="space-y-2">
-              <div class="text-xs font-semibold text-slate-600">種目</div>
-              <div id="categoryCheckboxGroup" class="flex flex-wrap gap-2"></div>
-            </div>
+    <main class="flex-1 max-w-5xl w-full mx-auto px-4 py-5 space-y-5">
+      <!-- 1. フォルダ画面（押すと自動で一覧表示） -->
+      <section id="viewFolders" class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="text-base font-bold text-slate-900">フォルダ</h2>
+          <div class="flex items-center gap-1.5">
+            <button
+              id="exportJsonBtn"
+              type="button"
+              class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white"
+            >
+              JSON保存
+            </button>
+            <button
+              id="restoreJsonBtn"
+              type="button"
+              class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 text-white"
+            >
+              JSON復元
+            </button>
+            <input id="restoreJsonFile" type="file" accept=".json,application/json" class="hidden" />
           </div>
         </div>
 
-        <!-- 絞り込み結果テーブル -->
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-3">
-          <div class="flex items-center justify-between gap-2">
-            <h3 class="text-base font-bold text-slate-900">申込者一覧</h3>
-            <span id="filteredCountLabel" class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold">
-              0件表示
-            </span>
-          </div>
-
-          <div class="overflow-x-auto border border-slate-200 rounded-xl">
-            <table class="w-full text-left border-collapse">
-              <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-                <tr>
-                  <th class="px-3 py-2.5 whitespace-nowrap">No</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">氏名</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">フリガナ</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">学年</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">性別</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">生年月日</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">種目</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">住所</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">連絡先</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">申込日時</th>
-                  <th class="px-3 py-2.5 whitespace-nowrap">操作</th>
-                </tr>
-              </thead>
-              <tbody id="submissionsTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- 入力フォームの確認（QRコード・URL表示＋手動入力＆保存） -->
-      <section id="sectionFormCheck" class="hidden space-y-6">
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-5">
-          <div>
-            <h2 class="text-lg font-bold text-slate-900">入力フォームの確認</h2>
-            <p id="formCheckSelectedFolderLabel" class="text-xs text-slate-500 mt-0.5">対象フォルダ</p>
-          </div>
-
-          <div class="max-w-md">
-            <label for="formCheckFolderSelect" class="block text-xs font-semibold text-slate-700 mb-1">
-              対象フォルダを選択
-            </label>
-            <select
-              id="formCheckFolderSelect"
-              class="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            ></select>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-center border-t border-slate-100 pt-5">
-            <div class="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-50 border border-slate-200">
-              <div class="text-xs font-bold text-slate-700 mb-3">入力フォームの確認（QRコード）</div>
-              <div id="formQrCodeBox" class="p-3 bg-white rounded-xl border border-slate-200"></div>
-            </div>
-
-            <div class="space-y-3">
-              <div class="text-xs font-bold text-slate-700">入力フォームの確認（URL）</div>
-              <div class="flex gap-2">
-                <input
-                  id="formShareUrlInput"
-                  type="text"
-                  readonly
-                  class="flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-xs sm:text-sm text-slate-800"
-                />
-                <button
-                  id="copyFormUrlBtn"
-                  type="button"
-                  class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs sm:text-sm font-semibold whitespace-nowrap"
-                >
-                  URLコピー
-                </button>
-              </div>
-              <p class="text-xs text-slate-500">
-                案内用のQRコードとURLを表示しています。受付や電話などで受け付けた内容は下のフォームから手動入力して保存できます。
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <!-- 手動入力＆保存フォーム -->
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6">
-          <h3 class="text-base font-bold text-slate-900 mb-1">手動入力して保存</h3>
-          <p class="text-xs text-slate-500 mb-4">選択中の確認フォルダへ申込データを直接追加保存します。</p>
-
-          <form id="manualEntryForm" class="space-y-4">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">氏名 *</label>
-                <input
-                  id="manualName"
-                  type="text"
-                  required
-                  placeholder="山田 太郎"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">フリガナ *</label>
-                <input
-                  id="manualKana"
-                  type="text"
-                  required
-                  placeholder="ヤマダ タロウ"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">学年</label>
-                <input
-                  id="manualGrade"
-                  type="text"
-                  placeholder="例: 小学4年 / 一般"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">性別</label>
-                <select
-                  id="manualGender"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">選択してください</option>
-                  <option value="男性">男性</option>
-                  <option value="女性">女性</option>
-                  <option value="その他">その他</option>
-                </select>
-              </div>
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">生年月日</label>
-                <input
-                  id="manualBirthDate"
-                  type="date"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">種目</label>
-                <input
-                  id="manualCategory"
-                  type="text"
-                  placeholder="例: 形 / 組手"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-semibold text-slate-700 mb-1">連絡先 *</label>
-                <input
-                  id="manualPhone"
-                  type="tel"
-                  required
-                  placeholder="090-1234-5678"
-                  class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label class="block text-xs font-semibold text-slate-700 mb-1">住所 *</label>
-              <input
-                id="manualAddress"
-                type="text"
-                required
-                placeholder="〒000-0000 〇〇県〇〇市..."
-                class="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <div class="pt-1">
-              <button
-                id="manualSaveBtn"
-                type="submit"
-                class="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm"
-              >
-                手動入力データを保存
-              </button>
-            </div>
-          </form>
-        </div>
-      </section>
-
-      <!-- フォルダ管理 -->
-      <section id="sectionFolders" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6 space-y-4">
-        <h2 class="text-lg font-bold text-slate-900">申し込みフォルダ管理</h2>
-        <form id="createFolderForm" class="flex flex-col sm:flex-row gap-2.5">
+        <form id="createFolderForm" class="flex gap-2">
           <input
-            id="newFolderNameInput"
+            id="newFolderInput"
             type="text"
             required
-            placeholder="新しい申し込みフォルダ名（例: 秋季大会 申込）"
-            class="flex-1 rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="新しいフォルダ名"
+            class="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button
             type="submit"
-            class="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold whitespace-nowrap"
+            class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold whitespace-nowrap"
           >
-            フォルダ作成
+            作成
           </button>
         </form>
-        <div id="foldersListBox" class="space-y-2.5"></div>
+
+        <div id="foldersListBox" class="space-y-2"></div>
+      </section>
+
+      <!-- 2. 申込者一覧画面（フォルダ選択で自動表示・「並び替え・条件指定」ボタン） -->
+      <section id="viewList" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <button
+              id="backToFoldersBtn"
+              type="button"
+              class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700"
+            >
+              ← フォルダ
+            </button>
+            <h2 id="listFolderName" class="text-base font-bold text-slate-900">一覧</h2>
+            <span id="listCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold">
+              0件
+            </span>
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <button
+              id="toggleFilterBtn"
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-900 text-white"
+            >
+              並び替え・条件指定
+            </button>
+            <button
+              id="exportCsvBtn"
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              CSV
+            </button>
+          </div>
+        </div>
+
+        <!-- 並び替え・条件指定パネル（ボタン押下で開閉） -->
+        <div id="filterPanel" class="hidden p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <label for="sortSelect" class="text-xs font-bold text-slate-700">並び替え</label>
+              <select
+                id="sortSelect"
+                class="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800"
+              >
+                <option value="createdAt_desc">申込日時（新しい順）</option>
+                <option value="createdAt_asc">申込日時（古い順）</option>
+                <option value="name_asc">氏名（あいうえお順）</option>
+                <option value="grade_asc">学年順</option>
+              </select>
+            </div>
+            <button
+              id="resetFilterBtn"
+              type="button"
+              class="text-xs font-semibold text-blue-600 hover:underline"
+            >
+              解除
+            </button>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="text-xs font-semibold text-slate-600">学年</div>
+            <div id="gradeChecks" class="flex flex-wrap gap-1.5"></div>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="text-xs font-semibold text-slate-600">性別</div>
+            <div id="genderChecks" class="flex flex-wrap gap-1.5"></div>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="text-xs font-semibold text-slate-600">種目</div>
+            <div id="categoryChecks" class="flex flex-wrap gap-1.5"></div>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto border border-slate-200 rounded-xl">
+          <table class="w-full text-left border-collapse">
+            <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+              <tr>
+                <th class="px-3 py-2 whitespace-nowrap">No</th>
+                <th class="px-3 py-2 whitespace-nowrap">氏名</th>
+                <th class="px-3 py-2 whitespace-nowrap">フリガナ</th>
+                <th class="px-3 py-2 whitespace-nowrap">学年</th>
+                <th class="px-3 py-2 whitespace-nowrap">性別</th>
+                <th class="px-3 py-2 whitespace-nowrap">種目</th>
+                <th class="px-3 py-2 whitespace-nowrap">連絡先</th>
+                <th class="px-3 py-2 whitespace-nowrap">住所</th>
+                <th class="px-3 py-2 whitespace-nowrap">申込日時</th>
+                <th class="px-3 py-2 whitespace-nowrap">操作</th>
+              </tr>
+            </thead>
+            <tbody id="listTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 3. 入力フォームの確認（QR・URL表示＋手動入力保存） -->
+      <section id="viewFormCheck" class="hidden space-y-4">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 space-y-4">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-base font-bold text-slate-900">入力フォームの確認</h2>
+            <span id="formCheckFolderBadge" class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-medium">
+              対象フォルダ：未選択
+            </span>
+          </div>
+
+          <div class="flex flex-col sm:flex-row items-center gap-4">
+            <div id="formCheckQrBox" class="p-2.5 bg-white rounded-xl border border-slate-200"></div>
+            <div class="w-full flex-1 flex gap-2">
+              <input
+                id="formCheckUrlInput"
+                type="text"
+                readonly
+                class="flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs sm:text-sm"
+              />
+              <button
+                id="copyUrlBtn"
+                type="button"
+                class="px-3.5 py-2 rounded-xl bg-slate-800 text-white text-xs font-semibold whitespace-nowrap"
+              >
+                コピー
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 space-y-3">
+          <h3 class="text-base font-bold text-slate-900">手動入力</h3>
+          <form id="manualSaveForm" class="space-y-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input id="mName" type="text" required placeholder="氏名 *" class="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              <input id="mKana" type="text" required placeholder="フリガナ *" class="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <input id="mGrade" type="text" placeholder="学年" class="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              <select id="mGender" class="rounded-xl border border-slate-300 px-3 py-2 text-sm bg-white">
+                <option value="">性別</option>
+                <option value="男性">男性</option>
+                <option value="女性">女性</option>
+                <option value="その他">その他</option>
+              </select>
+              <input id="mCategory" type="text" placeholder="種目" class="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input id="mPhone" type="tel" required placeholder="連絡先 *" class="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+              <input id="mAddress" type="text" required placeholder="住所 *" class="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <button
+              id="manualSubmitBtn"
+              type="submit"
+              class="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold"
+            >
+              保存
+            </button>
+          </form>
+        </div>
       </section>
     </main>
   </div>

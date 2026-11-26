@@ -76,6 +76,7 @@
 
     function showToast(message, type = "info") {
       const container = document.getElementById("toastContainer");
+      if (!container) return;
       const toast = document.createElement("div");
       const bg =
         type === "error"
@@ -231,7 +232,6 @@
       return state.submissions.filter((item) => item.eventId === state.selectedFolderId);
     }
 
-    // 参加者用フォーム画面の描画
     function renderApplicantFormView() {
       const folder = state.events.find((e) => e.id === urlEventId);
       const titleEl = document.getElementById("applicantTournamentTitle");
@@ -558,12 +558,16 @@
       if (qrBox) {
         qrBox.innerHTML = "";
         if (state.selectedFolderId && typeof QRCode !== "undefined") {
-          new QRCode(qrBox, {
-            text: url,
-            width: 164,
-            height: 164,
-            correctLevel: QRCode.CorrectLevel.M
-          });
+          try {
+            new QRCode(qrBox, {
+              text: url,
+              width: 164,
+              height: 164,
+              correctLevel: QRCode.CorrectLevel.M
+            });
+          } catch (e) {
+            console.error("QR生成エラー:", e);
+          }
         }
       }
 
@@ -585,35 +589,40 @@
     }
 
     function switchView(view) {
-      state.activeView = view;
+      try {
+        state.activeView = view;
 
-      const vFolders = document.getElementById("viewFolders");
-      const vList = document.getElementById("viewList");
-      const vFormCheck = document.getElementById("viewFormCheck");
+        const vFolders = document.getElementById("viewFolders");
+        const vList = document.getElementById("viewList");
+        const vFormCheck = document.getElementById("viewFormCheck");
 
-      const bFolders = document.getElementById("navFoldersBtn");
-      const bFormCheck = document.getElementById("navFormCheckBtn");
+        const bFolders = document.getElementById("navFoldersBtn");
+        const bFormCheck = document.getElementById("navFormCheckBtn");
 
-      vFolders.classList.add("hidden");
-      vList.classList.add("hidden");
-      vFormCheck.classList.add("hidden");
+        if (vFolders) vFolders.classList.add("hidden");
+        if (vList) vList.classList.add("hidden");
+        if (vFormCheck) vFormCheck.classList.add("hidden");
 
-      const offStyle = "px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200";
-      const onStyle = "px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-blue-600 text-white";
+        const offStyle = "px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200";
+        const onStyle = "px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold bg-blue-600 text-white";
 
-      bFolders.className = view === "folders" ? onStyle : offStyle;
-      bFormCheck.className = view === "formCheck" ? onStyle : offStyle;
+        if (bFolders) bFolders.className = view === "folders" ? onStyle : offStyle;
+        if (bFormCheck) bFormCheck.className = view === "formCheck" ? onStyle : offStyle;
 
-      if (view === "folders") {
-        vFolders.classList.remove("hidden");
-        renderFoldersView();
-      } else if (view === "list") {
-        vList.classList.remove("hidden");
-        renderCheckGroups();
-        renderListRows();
-      } else if (view === "formCheck") {
-        vFormCheck.classList.remove("hidden");
-        renderFormCheckView();
+        if (view === "folders") {
+          if (vFolders) vFolders.classList.remove("hidden");
+          renderFoldersView();
+        } else if (view === "list") {
+          if (vList) vList.classList.remove("hidden");
+          renderCheckGroups();
+          renderListRows();
+        } else if (view === "formCheck") {
+          if (vFormCheck) vFormCheck.classList.remove("hidden");
+          renderFormCheckView();
+        }
+      } catch (err) {
+        console.error("画面切り替えエラー:", err);
+        showToast("画面表示中にエラーが発生しました", "error");
       }
     }
 
@@ -623,21 +632,21 @@
       const adminSection = document.getElementById("adminSection");
 
       if (isApplicantMode) {
-        appSection.classList.remove("hidden");
-        gateSection.classList.add("hidden");
-        adminSection.classList.add("hidden");
+        if (appSection) appSection.classList.remove("hidden");
+        if (gateSection) gateSection.classList.add("hidden");
+        if (adminSection) adminSection.classList.add("hidden");
         renderApplicantFormView();
         return;
       }
 
-      appSection.classList.add("hidden");
+      if (appSection) appSection.classList.add("hidden");
       if (state.isAuthenticated) {
-        gateSection.classList.add("hidden");
-        adminSection.classList.remove("hidden");
+        if (gateSection) gateSection.classList.add("hidden");
+        if (adminSection) adminSection.classList.remove("hidden");
         switchView(state.activeView || "folders");
       } else {
-        gateSection.classList.remove("hidden");
-        adminSection.classList.add("hidden");
+        if (gateSection) gateSection.classList.remove("hidden");
+        if (adminSection) adminSection.classList.add("hidden");
       }
     }
 
@@ -816,8 +825,24 @@
     document.addEventListener("DOMContentLoaded", () => {
       renderFolderFieldCheckboxes();
 
+      // パスワード認証（前後空白を除去して照合）
+      document.getElementById("gateForm")?.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const inputEl = document.getElementById("gatePassInput");
+        const enteredPass = String(inputEl?.value || "").trim();
+        if (enteredPass === ADMIN_PASSCODE) {
+          state.isAuthenticated = true;
+          state.activeView = "folders";
+          if (inputEl) inputEl.value = "";
+          applyModeAndGate();
+          showToast("管理画面を開きました", "success");
+        } else {
+          showToast("パスワードが違います", "error");
+        }
+      });
+
       // 参加者向けフォーム送信
-      document.getElementById("applicantForm").addEventListener("submit", async (e) => {
+      document.getElementById("applicantForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const folder = state.events.find((ev) => ev.id === urlEventId);
         if (!folder) {
@@ -828,8 +853,10 @@
         const enabledKeys = getFolderFields(folder);
         const fieldValues = collectFormDataByKeys(e.target, enabledKeys);
         const btn = document.getElementById("applicantSubmitBtn");
-        btn.disabled = true;
-        btn.textContent = "送信中...";
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "送信中...";
+        }
 
         try {
           await addDoc(collection(db, "submissions"), {
@@ -841,58 +868,48 @@
             source: "form_url"
           });
           e.target.reset();
-          document.getElementById("applicantDoneBox").classList.remove("hidden");
+          document.getElementById("applicantDoneBox")?.classList.remove("hidden");
           showToast("申し込みを送信しました", "success");
         } catch (err) {
           console.error(err);
           showToast("送信に失敗しました", "error");
         } finally {
-          btn.disabled = false;
-          btn.textContent = "申し込む";
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = "申し込む";
+          }
         }
       });
 
-      document.getElementById("gateForm").addEventListener("submit", (e) => {
-        e.preventDefault();
-        if (document.getElementById("gatePassInput").value === ADMIN_PASSCODE) {
-          state.isAuthenticated = true;
-          state.activeView = "folders";
-          document.getElementById("gatePassInput").value = "";
-          applyModeAndGate();
-        } else {
-          showToast("パスワードが違います", "error");
-        }
-      });
-
-      document.getElementById("lockBtn").addEventListener("click", () => {
+      document.getElementById("lockBtn")?.addEventListener("click", () => {
         state.isAuthenticated = false;
         applyModeAndGate();
       });
 
-      document.getElementById("navFoldersBtn").addEventListener("click", () => switchView("folders"));
-      document.getElementById("navFormCheckBtn").addEventListener("click", () => switchView("formCheck"));
-      document.getElementById("backToFoldersBtn").addEventListener("click", () => switchView("folders"));
+      document.getElementById("navFoldersBtn")?.addEventListener("click", () => switchView("folders"));
+      document.getElementById("navFormCheckBtn")?.addEventListener("click", () => switchView("formCheck"));
+      document.getElementById("backToFoldersBtn")?.addEventListener("click", () => switchView("folders"));
 
-      document.getElementById("openCreateFolderBtn").addEventListener("click", () => {
+      document.getElementById("openCreateFolderBtn")?.addEventListener("click", () => {
         state.isCreateFolderOpen = !state.isCreateFolderOpen;
-        document.getElementById("createFolderBox").classList.toggle("hidden", !state.isCreateFolderOpen);
+        document.getElementById("createFolderBox")?.classList.toggle("hidden", !state.isCreateFolderOpen);
         if (state.isCreateFolderOpen) {
           renderFolderFieldCheckboxes();
-          document.getElementById("newTournamentNameInput").focus();
+          document.getElementById("newTournamentNameInput")?.focus();
         }
       });
 
-      document.getElementById("cancelCreateFolderBtn").addEventListener("click", () => {
+      document.getElementById("cancelCreateFolderBtn")?.addEventListener("click", () => {
         state.isCreateFolderOpen = false;
-        document.getElementById("createFolderBox").classList.add("hidden");
-        document.getElementById("createFolderForm").reset();
+        document.getElementById("createFolderBox")?.classList.add("hidden");
+        document.getElementById("createFolderForm")?.reset();
         renderFolderFieldCheckboxes();
       });
 
-      document.getElementById("createFolderForm").addEventListener("submit", async (e) => {
+      document.getElementById("createFolderForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const tournamentName = document.getElementById("newTournamentNameInput").value.trim();
-        const eventDate = document.getElementById("newTournamentDateInput").value;
+        const tournamentName = document.getElementById("newTournamentNameInput")?.value.trim() || "";
+        const eventDate = document.getElementById("newTournamentDateInput")?.value || "";
         const checkedFields = Array.from(
           e.target.querySelectorAll('input[name="folderField"]:checked')
         ).map((el) => el.value);
@@ -907,7 +924,7 @@
         }
 
         const btn = document.getElementById("createFolderSubmitBtn");
-        btn.disabled = true;
+        if (btn) btn.disabled = true;
         try {
           const createdRef = await addDoc(collection(db, "events"), {
             name: tournamentName,
@@ -919,34 +936,35 @@
           e.target.reset();
           renderFolderFieldCheckboxes();
           state.isCreateFolderOpen = false;
-          document.getElementById("createFolderBox").classList.add("hidden");
+          document.getElementById("createFolderBox")?.classList.add("hidden");
           showToast("フォルダを作成しました", "success");
         } catch (err) {
           console.error(err);
           showToast("作成に失敗しました", "error");
         } finally {
-          btn.disabled = false;
+          if (btn) btn.disabled = false;
         }
       });
 
-      document.getElementById("formCheckFolderSelect").addEventListener("change", (e) => {
+      document.getElementById("formCheckFolderSelect")?.addEventListener("change", (e) => {
         state.selectedFolderId = e.target.value;
         renderFormCheckView();
       });
 
-      document.getElementById("toggleFilterBtn").addEventListener("click", () => {
+      document.getElementById("toggleFilterBtn")?.addEventListener("click", () => {
         state.isFilterPanelOpen = !state.isFilterPanelOpen;
-        document.getElementById("filterPanel").classList.toggle("hidden", !state.isFilterPanelOpen);
+        document.getElementById("filterPanel")?.classList.toggle("hidden", !state.isFilterPanelOpen);
       });
 
-      document.getElementById("sortSelect").addEventListener("change", (e) => {
+      document.getElementById("sortSelect")?.addEventListener("change", (e) => {
         state.sortBy = e.target.value;
         renderListRows();
       });
 
-      document.getElementById("resetFilterBtn").addEventListener("click", () => {
+      document.getElementById("resetFilterBtn")?.addEventListener("click", () => {
         state.sortBy = "createdAt_desc";
-        document.getElementById("sortSelect").value = "createdAt_desc";
+        const sortEl = document.getElementById("sortSelect");
+        if (sortEl) sortEl.value = "createdAt_desc";
         state.selectedGrades.clear();
         state.selectedGenders.clear();
         state.selectedCategories.clear();
@@ -954,20 +972,20 @@
         renderListRows();
       });
 
-      document.getElementById("copyUrlBtn").addEventListener("click", async () => {
-        const val = document.getElementById("formCheckUrlInput").value;
+      document.getElementById("copyUrlBtn")?.addEventListener("click", async () => {
+        const val = document.getElementById("formCheckUrlInput")?.value || "";
         try {
           await navigator.clipboard.writeText(val);
           showToast("URLをコピーしました", "success");
         } catch {
           const inp = document.getElementById("formCheckUrlInput");
-          inp.select();
+          inp?.select();
           document.execCommand("copy");
           showToast("URLをコピーしました", "success");
         }
       });
 
-      document.getElementById("manualSaveForm").addEventListener("submit", async (e) => {
+      document.getElementById("manualSaveForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const folder = state.events.find((x) => x.id === state.selectedFolderId);
         if (!folder) {
@@ -978,7 +996,7 @@
         const enabledKeys = getFolderFields(folder);
         const fieldValues = collectFormDataByKeys(e.target, enabledKeys);
         const btn = document.getElementById("manualSubmitBtn");
-        btn.disabled = true;
+        if (btn) btn.disabled = true;
 
         try {
           await addDoc(collection(db, "submissions"), {
@@ -995,19 +1013,20 @@
           console.error(err);
           showToast("保存に失敗しました", "error");
         } finally {
-          btn.disabled = false;
+          if (btn) btn.disabled = false;
         }
       });
 
-      document.getElementById("exportJsonBtn").addEventListener("click", exportJson);
-      document.getElementById("exportExcelBtn").addEventListener("click", exportExcel);
+      document.getElementById("exportJsonBtn")?.addEventListener("click", exportJson);
+      document.getElementById("exportExcelBtn")?.addEventListener("click", exportExcel);
 
       const fileInput = document.getElementById("restoreJsonFile");
-      document.getElementById("restoreJsonBtn").addEventListener("click", () => {
+      document.getElementById("restoreJsonBtn")?.addEventListener("click", () => {
+        if (!fileInput) return;
         fileInput.value = "";
         fileInput.click();
       });
-      fileInput.addEventListener("change", async (e) => {
+      fileInput?.addEventListener("change", async (e) => {
         const f = e.target.files?.[0];
         if (!f) return;
         try {
@@ -1018,28 +1037,42 @@
         }
       });
 
-      onSnapshot(query(collection(db, "events"), orderBy("createdAt", "desc")), (snap) => {
-        state.events = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        if (!state.selectedFolderId && state.events.length > 0) {
-          state.selectedFolderId = state.events[0].id;
+      onSnapshot(
+        query(collection(db, "events"), orderBy("createdAt", "desc")),
+        (snap) => {
+          state.events = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          if (!state.selectedFolderId && state.events.length > 0) {
+            state.selectedFolderId = state.events[0].id;
+          }
+          if (isApplicantMode) {
+            renderApplicantFormView();
+          } else if (state.isAuthenticated) {
+            if (state.activeView === "folders") renderFoldersView();
+            if (state.activeView === "list") renderListRows();
+            if (state.activeView === "formCheck") renderFormCheckView();
+          }
+        },
+        (err) => {
+          console.error("events購読エラー:", err);
         }
-        if (isApplicantMode) {
-          renderApplicantFormView();
-        } else if (state.isAuthenticated) {
-          renderFoldersView();
-          renderListRows();
-          renderFormCheckView();
-        }
-      });
+      );
 
-      onSnapshot(query(collection(db, "submissions"), orderBy("createdAt", "desc")), (snap) => {
-        state.submissions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        if (!isApplicantMode && state.isAuthenticated) {
-          renderFoldersView();
-          renderCheckGroups();
-          renderListRows();
+      onSnapshot(
+        query(collection(db, "submissions"), orderBy("createdAt", "desc")),
+        (snap) => {
+          state.submissions = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          if (!isApplicantMode && state.isAuthenticated) {
+            if (state.activeView === "folders") renderFoldersView();
+            if (state.activeView === "list") {
+              renderCheckGroups();
+              renderListRows();
+            }
+          }
+        },
+        (err) => {
+          console.error("submissions購読エラー:", err);
         }
-      });
+      );
 
       applyModeAndGate();
     });
@@ -1075,7 +1108,7 @@
   </section>
 
   <!-- 1. 管理者パスワード入力画面 -->
-  <section id="gateSection" class="hidden min-h-screen flex items-center justify-center p-4">
+  <section id="gateSection" class="min-h-screen flex items-center justify-center p-4">
     <div class="w-full max-w-sm bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
       <div class="text-center space-y-1">
         <h1 class="text-lg font-bold text-slate-900">パスワード入力</h1>

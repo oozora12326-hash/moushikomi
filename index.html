@@ -13,6 +13,7 @@
       collection,
       doc,
       addDoc,
+      updateDoc,
       deleteDoc,
       onSnapshot,
       query,
@@ -84,7 +85,9 @@
       sortBy: "createdAt_desc",
       selectedGrades: new Set(),
       selectedGenders: new Set(),
-      selectedCategories: new Set()
+      selectedCategories: new Set(),
+      mailTargetItem: null,
+      mailTargetFolder: null
     };
 
     function showToast(message, type = "info") {
@@ -342,13 +345,8 @@
       return state.submissions.filter((item) => item.eventId === state.selectedFolderId);
     }
 
-    function sendConfirmationEmail(item, folder) {
+    function buildConfirmationEmailPayload(item, folder) {
       const toEmail = String(item?.email || "").trim();
-      if (!toEmail) {
-        showToast("メールアドレスが入力されていません", "error");
-        return;
-      }
-
       const eventName = String(folder?.name || item?.eventName || "大会申し込み").trim();
       const eventDate = formatEventDateTime(folder?.eventDate || item?.eventDate || "");
       const applicantName = String(item?.name || "").trim();
@@ -377,12 +375,91 @@
         "内容に誤りがある場合は、本メールへの返信にてお知らせください。"
       ];
 
-      const mailtoUrl =
-        `mailto:${encodeURIComponent(toEmail)}` +
-        `?subject=${encodeURIComponent(subject)}` +
-        `&body=${encodeURIComponent(bodyLines.join("\n"))}`;
+      return {
+        to: toEmail,
+        subject,
+        body: bodyLines.join("\n")
+      };
+    }
 
-      window.location.href = mailtoUrl;
+    function openMailAppPickerModal(item, folder) {
+      const toEmail = String(item?.email || "").trim();
+      if (!toEmail) {
+        showToast("メールアドレスが入力されていません", "error");
+        return;
+      }
+
+      state.mailTargetItem = item;
+      state.mailTargetFolder = folder;
+
+      const modal = document.getElementById("mailAppModal");
+      const infoEl = document.getElementById("mailModalRecipient");
+      if (infoEl) {
+        const namePart = item?.name ? `${item.name} 様（${toEmail}）` : toEmail;
+        infoEl.textContent = `宛先：${namePart}`;
+      }
+      if (modal) {
+        modal.classList.remove("hidden");
+      }
+    }
+
+    function closeMailAppPickerModal() {
+      const modal = document.getElementById("mailAppModal");
+      if (modal) {
+        modal.classList.add("hidden");
+      }
+      state.mailTargetItem = null;
+      state.mailTargetFolder = null;
+    }
+
+    async function launchMailAppAndMarkSent(appType) {
+      const item = state.mailTargetItem;
+      const folder = state.mailTargetFolder;
+      if (!item || !item.email) {
+        closeMailAppPickerModal();
+        return;
+      }
+
+      const { to, subject, body } = buildConfirmationEmailPayload(item, folder);
+      const encTo = encodeURIComponent(to);
+      const encSubject = encodeURIComponent(subject);
+      const encBody = encodeURIComponent(body);
+
+      let targetUrl = "";
+      let openInNewTab = false;
+
+      if (appType === "gmail") {
+        targetUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encTo}&su=${encSubject}&body=${encBody}`;
+        openInNewTab = true;
+      } else if (appType === "yahoo") {
+        targetUrl = `https://compose.mail.yahoo.co.jp/?to=${encTo}&subj=${encSubject}&body=${encBody}`;
+        openInNewTab = true;
+      } else if (appType === "outlook") {
+        targetUrl = `https://outlook.live.com/mail/0/deeplink/compose?to=${encTo}&subject=${encSubject}&body=${encBody}`;
+        openInNewTab = true;
+      } else {
+        targetUrl = `mailto:${encTo}?subject=${encSubject}&body=${encBody}`;
+        openInNewTab = false;
+      }
+
+      const itemId = item.id;
+      closeMailAppPickerModal();
+
+      if (openInNewTab) {
+        window.open(targetUrl, "_blank", "noopener");
+      } else {
+        window.location.href = targetUrl;
+      }
+
+      try {
+        await updateDoc(doc(db, "submissions", itemId), {
+          emailSent: true,
+          emailSentAt: Date.now()
+        });
+        showToast("確認メール作成画面を開き、「済」を記録しました", "success");
+      } catch (err) {
+        console.error("送信済みフラグ更新エラー:", err);
+      }
     }
 
     function renderApplicantFormView() {
@@ -683,18 +760,26 @@
         tbody.innerHTML = rows
           .map((item, i) => {
             const hasEmail = Boolean(String(item?.email || "").trim());
+            const isSent = Boolean(item?.emailSent);
+            const sentBadgeHtml = isSent
+              ? `<span class="px-1.5 py-0.5 text-[11px] font-bold rounded bg-emerald-100 text-emerald-800 border border-emerald-200">済</span>`
+              : "";
+
             const mailBtnHtml = hasEmail
-              ? `<button
-                  type="button"
-                  data-mail-item="${escapeHtml(item.id)}"
-                  title="${escapeHtml(item.email)} へ確認メールを作成"
-                  class="px-2.5 py-1 text-xs rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-semibold"
-                >✉️ 送信</button>`
+              ? `<div class="inline-flex items-center justify-center gap-1.5">
+                  <button
+                    type="button"
+                    data-mail-item="${escapeHtml(item.id)}"
+                    title="${escapeHtml(item.email)} へ確認メールを送信"
+                    class="px-2.5 py-1 text-sm leading-none rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-semibold"
+                  >✉️</button>
+                  ${sentBadgeHtml}
+                </div>`
               : `<button
                   type="button"
                   disabled
                   title="メールアドレス未登録"
-                  class="px-2.5 py-1 text-xs rounded-lg bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                  class="px-2.5 py-1 text-sm leading-none rounded-lg bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
                 >✉️</button>`;
 
             const cellsHtml = fieldKeys
@@ -731,7 +816,7 @@
             const id = btn.getAttribute("data-mail-item");
             const targetItem = rows.find((r) => r.id === id);
             if (targetItem) {
-              sendConfirmationEmail(targetItem, folder);
+              openMailAppPickerModal(targetItem, folder);
             }
           });
         });
@@ -1101,6 +1186,20 @@
       renderFolderFieldCheckboxes();
       populateNewFolderDateSelectors();
 
+      document.querySelectorAll("[data-select-mail-app]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const appType = btn.getAttribute("data-select-mail-app");
+          launchMailAppAndMarkSent(appType);
+        });
+      });
+
+      document.getElementById("closeMailModalBtn")?.addEventListener("click", closeMailAppPickerModal);
+      document.getElementById("mailAppModal")?.addEventListener("click", (e) => {
+        if (e.target?.id === "mailAppModal") {
+          closeMailAppPickerModal();
+        }
+      });
+
       document.getElementById("gatePassInput")?.addEventListener("input", () => {
         setGateError("");
       });
@@ -1149,6 +1248,7 @@
             eventName: folder.name || "",
             eventDate: folder.eventDate || "",
             ...fieldValues,
+            emailSent: false,
             createdAt: Date.now(),
             source: "form_url"
           });
@@ -1318,6 +1418,7 @@
             eventName: folder.name || "",
             eventDate: folder.eventDate || "",
             ...fieldValues,
+            emailSent: false,
             createdAt: Date.now(),
             source: "manual"
           });
@@ -1394,6 +1495,59 @@
 </head>
 <body class="bg-slate-100 text-slate-900 min-h-screen">
   <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+  <!-- メールアプリ選択モーダル -->
+  <div id="mailAppModal" class="hidden fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+    <div class="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-slate-200 p-5 space-y-4">
+      <div class="space-y-1">
+        <h3 class="text-base font-bold text-slate-900">使用するメールアプリを選択</h3>
+        <p id="mailModalRecipient" class="text-xs text-slate-600 break-all"></p>
+      </div>
+      <div class="space-y-2">
+        <button
+          type="button"
+          data-select-mail-app="default"
+          class="w-full px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-sm font-semibold text-left flex items-center justify-between"
+        >
+          <span>標準メールアプリ（Apple Mail など）</span>
+          <span>→</span>
+        </button>
+        <button
+          type="button"
+          data-select-mail-app="gmail"
+          class="w-full px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-semibold text-left flex items-center justify-between"
+        >
+          <span>Gmail</span>
+          <span>→</span>
+        </button>
+        <button
+          type="button"
+          data-select-mail-app="yahoo"
+          class="w-full px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold text-left flex items-center justify-between"
+        >
+          <span>Yahoo!メール</span>
+          <span>→</span>
+        </button>
+        <button
+          type="button"
+          data-select-mail-app="outlook"
+          class="w-full px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold text-left flex items-center justify-between"
+        >
+          <span>Outlook</span>
+          <span>→</span>
+        </button>
+      </div>
+      <div class="pt-1 border-t border-slate-100 text-right">
+        <button
+          id="closeMailModalBtn"
+          type="button"
+          class="px-4 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
+        >
+          キャンセル
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- 0. 参加者向け専用URLフォーム（?eventId=... で開いたとき） -->
   <section id="applicantSection" class="hidden min-h-screen py-8 px-4">

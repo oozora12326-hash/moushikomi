@@ -32,13 +32,23 @@
     const ADMIN_PASSCODE = "1234"; // 必要に応じて変更してください
 
     const FORM_FIELDS = [
-      { key: "name", label: "氏名", defaultChecked: true },
-      { key: "kana", label: "フリガナ", defaultChecked: true },
-      { key: "grade", label: "学年", defaultChecked: true },
-      { key: "gender", label: "性別", defaultChecked: true },
-      { key: "category", label: "種目", defaultChecked: true },
-      { key: "phone", label: "連絡先", defaultChecked: true },
-      { key: "address", label: "住所", defaultChecked: true }
+      { key: "name", label: "氏名", defaultChecked: true, required: true },
+      { key: "kana", label: "フリガナ", defaultChecked: true, required: true },
+      { key: "birthDate", label: "生年月日", defaultChecked: true, required: true },
+      { key: "grade", label: "学年", defaultChecked: true, required: true },
+      { key: "gender", label: "性別", defaultChecked: true, required: true },
+      { key: "category", label: "種目", defaultChecked: true, required: true },
+      { key: "danRank", label: "段位", defaultChecked: false, required: true },
+      {
+        key: "email",
+        label: "メールアドレス",
+        defaultChecked: true,
+        required: false,
+        helperText: "※送信後、確認メールを確認でき次第送信させていただきます。"
+      },
+      { key: "phone", label: "連絡先", defaultChecked: true, required: true },
+      { key: "address", label: "住所", defaultChecked: true, required: true },
+      { key: "remarks", label: "備考", defaultChecked: false, required: false }
     ];
 
     const GRADE_OPTIONS = [
@@ -52,6 +62,9 @@
 
     const GENDER_OPTIONS = ["男性", "女性"];
     const CATEGORY_OPTIONS = ["形", "組手", "両方"];
+    const DAN_RANK_OPTIONS = [
+      "初段", "弐段", "参段", "四段", "五段", "六段", "七段", "八段", "その他"
+    ];
 
     const params = new URLSearchParams(window.location.search);
     const urlEventId = (params.get("eventId") || "").trim();
@@ -138,8 +151,8 @@
       return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
-    function formatEventDate(dateStr) {
-      if (!dateStr) return "日程未設定";
+    function formatEventDateTime(dateStr) {
+      if (!dateStr) return "日時未設定";
       return String(dateStr).replace(/-/g, "/");
     }
 
@@ -147,11 +160,59 @@
       if (folder && Array.isArray(folder.enabledFields) && folder.enabledFields.length > 0) {
         return folder.enabledFields;
       }
-      return FORM_FIELDS.map((f) => f.key);
+      return FORM_FIELDS.filter((f) => f.defaultChecked).map((f) => f.key);
+    }
+
+    function getFieldMeta(key) {
+      return FORM_FIELDS.find((f) => f.key === key) || { key, label: key, required: false };
     }
 
     function getFieldLabel(key) {
-      return FORM_FIELDS.find((f) => f.key === key)?.label || key;
+      return getFieldMeta(key).label;
+    }
+
+    function buildYearOptionsHtml(startYear, endYear, selectedValue = "") {
+      const years = [];
+      for (let y = endYear; y >= startYear; y--) {
+        years.push(String(y));
+      }
+      return (
+        `<option value="">年</option>` +
+        years
+          .map((y) => `<option value="${y}" ${y === String(selectedValue) ? "selected" : ""}>${y}年</option>`)
+          .join("")
+      );
+    }
+
+    function buildMonthOptionsHtml(selectedValue = "") {
+      const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0"));
+      return (
+        `<option value="">月</option>` +
+        months
+          .map((m) => `<option value="${m}" ${m === String(selectedValue) ? "selected" : ""}>${Number(m)}月</option>`)
+          .join("")
+      );
+    }
+
+    function buildDayOptionsHtml(selectedValue = "") {
+      const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, "0"));
+      return (
+        `<option value="">日</option>` +
+        days
+          .map((d) => `<option value="${d}" ${d === String(selectedValue) ? "selected" : ""}>${Number(d)}日</option>`)
+          .join("")
+      );
+    }
+
+    function populateNewFolderDateSelectors() {
+      const nowYear = new Date().getFullYear();
+      const ySel = document.getElementById("newFolderYearSelect");
+      const mSel = document.getElementById("newFolderMonthSelect");
+      const dSel = document.getElementById("newFolderDaySelect");
+
+      if (ySel) ySel.innerHTML = buildYearOptionsHtml(nowYear - 1, nowYear + 5, String(nowYear));
+      if (mSel) mSel.innerHTML = buildMonthOptionsHtml("");
+      if (dSel) dSel.innerHTML = buildDayOptionsHtml("");
     }
 
     function renderFolderFieldCheckboxes() {
@@ -171,55 +232,85 @@
       `).join("");
     }
 
+    function buildSelectFieldHtml(id, key, label, required, options, placeholder) {
+      const reqAttr = required ? "required" : "";
+      const star = required ? " *" : "";
+      const opts = options
+        .map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`)
+        .join("");
+      return `
+        <div>
+          <label for="${escapeHtml(id)}" class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)}${star}</label>
+          <select id="${escapeHtml(id)}" name="${escapeHtml(key)}" ${reqAttr} class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">${escapeHtml(placeholder)}</option>
+            ${opts}
+          </select>
+        </div>
+      `;
+    }
+
     function buildDynamicFieldInputsHtml(enabledKeys, prefix) {
+      const currentYear = new Date().getFullYear();
+
       return enabledKeys.map((key) => {
-        const label = getFieldLabel(key);
+        const meta = getFieldMeta(key);
+        const label = meta.label;
+        const required = Boolean(meta.required);
+        const reqAttr = required ? "required" : "";
+        const star = required ? " *" : "";
         const id = `${prefix}_${key}`;
 
-        if (key === "grade") {
-          const opts = GRADE_OPTIONS.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join("");
+        if (key === "birthDate") {
           return `
             <div>
-              <label for="${escapeHtml(id)}" class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)} *</label>
-              <select id="${escapeHtml(id)}" name="${escapeHtml(key)}" required class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">学年を選択してください</option>
-                ${opts}
-              </select>
+              <div class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)}${star}（年・月・日）</div>
+              <div class="grid grid-cols-3 gap-2">
+                <select name="${escapeHtml(key)}_year" ${reqAttr} aria-label="生年月日（年）" class="rounded-xl border border-slate-300 bg-white px-2.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  ${buildYearOptionsHtml(currentYear - 100, currentYear)}
+                </select>
+                <select name="${escapeHtml(key)}_month" ${reqAttr} aria-label="生年月日（月）" class="rounded-xl border border-slate-300 bg-white px-2.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  ${buildMonthOptionsHtml()}
+                </select>
+                <select name="${escapeHtml(key)}_day" ${reqAttr} aria-label="生年月日（日）" class="rounded-xl border border-slate-300 bg-white px-2.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  ${buildDayOptionsHtml()}
+                </select>
+              </div>
             </div>
           `;
+        }
+
+        if (key === "grade") {
+          return buildSelectFieldHtml(id, key, label, required, GRADE_OPTIONS, "学年を選択してください");
         }
 
         if (key === "gender") {
-          const opts = GENDER_OPTIONS.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
-          return `
-            <div>
-              <label for="${escapeHtml(id)}" class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)} *</label>
-              <select id="${escapeHtml(id)}" name="${escapeHtml(key)}" required class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">性別を選択してください</option>
-                ${opts}
-              </select>
-            </div>
-          `;
+          return buildSelectFieldHtml(id, key, label, required, GENDER_OPTIONS, "性別を選択してください");
         }
 
         if (key === "category") {
-          const opts = CATEGORY_OPTIONS.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
-          return `
-            <div>
-              <label for="${escapeHtml(id)}" class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)} *</label>
-              <select id="${escapeHtml(id)}" name="${escapeHtml(key)}" required class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option value="">種目を選択してください</option>
-                ${opts}
-              </select>
-            </div>
-          `;
+          return buildSelectFieldHtml(id, key, label, required, CATEGORY_OPTIONS, "種目を選択してください");
         }
 
-        const inputType = key === "phone" ? "tel" : "text";
+        if (key === "danRank") {
+          return buildSelectFieldHtml(id, key, label, required, DAN_RANK_OPTIONS, "段位を選択してください");
+        }
+
+        const inputType = key === "phone" ? "tel" : key === "email" ? "email" : "text";
+        const placeholder =
+          key === "remarks"
+            ? "自由にご記入ください（任意）"
+            : key === "email"
+            ? "例: example@gmail.com（任意）"
+            : "";
+        const helperHtml = meta.helperText
+          ? `<p class="mt-1 text-xs text-slate-600">${escapeHtml(meta.helperText)}</p>`
+          : "";
+
         return `
           <div>
-            <label for="${escapeHtml(id)}" class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)} *</label>
-            <input id="${escapeHtml(id)}" name="${escapeHtml(key)}" type="${inputType}" required class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <label for="${escapeHtml(id)}" class="block text-xs font-semibold text-slate-700 mb-1">${escapeHtml(label)}${star}</label>
+            <input id="${escapeHtml(id)}" name="${escapeHtml(key)}" type="${inputType}" ${reqAttr} placeholder="${escapeHtml(placeholder)}" class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            ${helperHtml}
           </div>
         `;
       }).join("");
@@ -228,6 +319,13 @@
     function collectFormDataByKeys(formEl, enabledKeys) {
       const data = {};
       enabledKeys.forEach((key) => {
+        if (key === "birthDate") {
+          const y = String(formEl.querySelector(`[name="${key}_year"]`)?.value || "").trim();
+          const m = String(formEl.querySelector(`[name="${key}_month"]`)?.value || "").trim();
+          const d = String(formEl.querySelector(`[name="${key}_day"]`)?.value || "").trim();
+          data[key] = y && m && d ? `${y}/${m}/${d}` : [y, m, d].filter(Boolean).join("/");
+          return;
+        }
         const el = formEl.querySelector(`[name="${key}"]`);
         data[key] = el ? String(el.value || "").trim() : "";
       });
@@ -242,6 +340,49 @@
     function getFolderItems() {
       if (!state.selectedFolderId) return [];
       return state.submissions.filter((item) => item.eventId === state.selectedFolderId);
+    }
+
+    function sendConfirmationEmail(item, folder) {
+      const toEmail = String(item?.email || "").trim();
+      if (!toEmail) {
+        showToast("メールアドレスが入力されていません", "error");
+        return;
+      }
+
+      const eventName = String(folder?.name || item?.eventName || "大会申し込み").trim();
+      const eventDate = formatEventDateTime(folder?.eventDate || item?.eventDate || "");
+      const applicantName = String(item?.name || "").trim();
+
+      const fieldKeys = getDisplayFieldKeysForFolder(folder, [item]);
+      const detailsLines = fieldKeys
+        .map((k) => {
+          const val = String(item?.[k] ?? "").trim();
+          if (!val) return null;
+          return `・${getFieldLabel(k)}：${val}`;
+        })
+        .filter(Boolean);
+
+      const subject = `【お申し込み内容の確認】${eventName}`;
+      const bodyLines = [
+        applicantName ? `${applicantName} 様` : "お申し込み者 様",
+        "",
+        `この度は「${eventName}」（日時：${eventDate}）へお申し込みいただきありがとうございます。`,
+        "以下の内容にてお申し込みを確認いたしました。",
+        "",
+        "────────────────────",
+        ...detailsLines,
+        `・申込日時：${formatDateTime(item?.createdAt)}`,
+        "────────────────────",
+        "",
+        "内容に誤りがある場合は、本メールへの返信にてお知らせください。"
+      ];
+
+      const mailtoUrl =
+        `mailto:${encodeURIComponent(toEmail)}` +
+        `?subject=${encodeURIComponent(subject)}` +
+        `&body=${encodeURIComponent(bodyLines.join("\n"))}`;
+
+      window.location.href = mailtoUrl;
     }
 
     function renderApplicantFormView() {
@@ -267,7 +408,7 @@
         }
 
         if (titleEl) titleEl.textContent = folder.name || "申し込みフォーム";
-        if (dateEl) dateEl.textContent = `日にち：${formatEventDate(folder.eventDate)}`;
+        if (dateEl) dateEl.textContent = `日時：${formatEventDateTime(folder.eventDate)}`;
         if (submitBtn) submitBtn.disabled = false;
 
         const enabledKeys = getFolderFields(folder);
@@ -291,7 +432,7 @@
         }
 
         if (state.events.length === 0) {
-          listEl.innerHTML = `<p class="text-sm text-slate-500 py-3">まだフォルダがありません。「フォルダ新規作成」から大会名・日にち・入力項目を選んで作成してください。</p>`;
+          listEl.innerHTML = `<p class="text-sm text-slate-500 py-3">まだフォルダがありません。「フォルダ新規作成」から大会名・日時・入力項目を選んで作成してください。</p>`;
           return;
         }
 
@@ -299,7 +440,7 @@
           .map((ev) => {
             const count = state.submissions.filter((s) => s.eventId === ev.id).length;
             const title = ev.name || "(名称未設定)";
-            const dateLabel = formatEventDate(ev.eventDate);
+            const dateLabel = formatEventDateTime(ev.eventDate);
             const fieldsLabel = getFolderFields(ev).map(getFieldLabel).join(" / ");
             return `
               <div class="p-3.5 rounded-xl bg-sky-50 border border-sky-200 hover:bg-sky-100/75 hover:border-sky-300 transition space-y-2">
@@ -310,7 +451,7 @@
                     class="flex-1 text-left space-y-0.5"
                   >
                     <div class="font-bold text-sm sm:text-base text-slate-900">${escapeHtml(title)}</div>
-                    <div class="text-xs font-semibold text-sky-800">日にち：${escapeHtml(dateLabel)}</div>
+                    <div class="text-xs font-semibold text-sky-800">日時：${escapeHtml(dateLabel)}</div>
                     <div class="text-[11px] text-slate-600">入力項目：${escapeHtml(fieldsLabel)}</div>
                   </button>
                   <div class="flex items-center gap-1.5">
@@ -484,25 +625,54 @@
       });
     }
 
+    function getDisplayFieldKeysForFolder(folder, rowsData) {
+      const folderKeys = getFolderFields(folder);
+      const extraKeys = [];
+      rowsData.forEach((item) => {
+        if (item && typeof item === "object") {
+          FORM_FIELDS.forEach((f) => {
+            if (item[f.key] && !folderKeys.includes(f.key) && !extraKeys.includes(f.key)) {
+              extraKeys.push(f.key);
+            }
+          });
+        }
+      });
+      return [...folderKeys, ...extraKeys];
+    }
+
     function renderListRows() {
       try {
         const folder = state.events.find((e) => e.id === state.selectedFolderId);
         const titleEl = document.getElementById("listFolderName");
         const dateEl = document.getElementById("listFolderDate");
         const countEl = document.getElementById("listCountBadge");
+        const theadRow = document.getElementById("listTableHeadRow");
         const tbody = document.getElementById("listTableBody");
 
         if (titleEl) titleEl.textContent = folder ? folder.name : "フォルダ未選択";
-        if (dateEl) dateEl.textContent = folder ? `日にち：${formatEventDate(folder.eventDate)}` : "";
+        if (dateEl) dateEl.textContent = folder ? `日時：${formatEventDateTime(folder.eventDate)}` : "";
 
         const rows = getFilteredAndSortedItems();
         if (countEl) countEl.textContent = `${rows.length}件`;
 
+        const fieldKeys = getDisplayFieldKeysForFolder(folder, rows);
+
+        if (theadRow) {
+          theadRow.innerHTML =
+            `<th class="px-3 py-2 whitespace-nowrap text-center">確認メール</th>` +
+            `<th class="px-3 py-2 whitespace-nowrap">No</th>` +
+            fieldKeys.map((k) => `<th class="px-3 py-2 whitespace-nowrap">${escapeHtml(getFieldLabel(k))}</th>`).join("") +
+            `<th class="px-3 py-2 whitespace-nowrap">申込日時</th>` +
+            `<th class="px-3 py-2 whitespace-nowrap">操作</th>`;
+        }
+
         if (!tbody) return;
+        const colSpan = fieldKeys.length + 4;
+
         if (rows.length === 0) {
           tbody.innerHTML = `
             <tr>
-              <td colspan="10" class="px-3 py-6 text-center text-xs sm:text-sm text-slate-500">
+              <td colspan="${colSpan}" class="px-3 py-6 text-center text-xs sm:text-sm text-slate-500">
                 条件に該当する申込データがありません。
               </td>
             </tr>
@@ -511,29 +681,60 @@
         }
 
         tbody.innerHTML = rows
-          .map((item, i) => `
-            <tr class="border-b border-slate-100 hover:bg-slate-50 text-xs sm:text-sm">
-              <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${i + 1}</td>
-              <td class="px-3 py-2 font-semibold text-slate-900 whitespace-nowrap">${escapeHtml(item.name || "")}</td>
-              <td class="px-3 py-2 text-slate-600 whitespace-nowrap">${escapeHtml(item.kana || "")}</td>
-              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.grade || "")}</td>
-              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.gender || "")}</td>
-              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.category || "")}</td>
-              <td class="px-3 py-2 text-slate-700 whitespace-nowrap">${escapeHtml(item.phone || "")}</td>
-              <td class="px-3 py-2 text-slate-700 min-w-[160px]">${escapeHtml(item.address || "")}</td>
-              <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
-              <td class="px-3 py-2 whitespace-nowrap">
-                <button
+          .map((item, i) => {
+            const hasEmail = Boolean(String(item?.email || "").trim());
+            const mailBtnHtml = hasEmail
+              ? `<button
                   type="button"
-                  data-del-item="${escapeHtml(item.id)}"
-                  class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200"
-                >
-                  削除
-                </button>
-              </td>
-            </tr>
-          `)
+                  data-mail-item="${escapeHtml(item.id)}"
+                  title="${escapeHtml(item.email)} へ確認メールを作成"
+                  class="px-2.5 py-1 text-xs rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-semibold"
+                >✉️ 送信</button>`
+              : `<button
+                  type="button"
+                  disabled
+                  title="メールアドレス未登録"
+                  class="px-2.5 py-1 text-xs rounded-lg bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
+                >✉️</button>`;
+
+            const cellsHtml = fieldKeys
+              .map((k) => {
+                const val = String(item?.[k] ?? "");
+                const extraClass = k === "name" ? "font-semibold text-slate-900" : "text-slate-700";
+                const widthClass = k === "address" || k === "remarks" ? "min-w-[160px]" : "whitespace-nowrap";
+                return `<td class="px-3 py-2 ${extraClass} ${widthClass}">${escapeHtml(val)}</td>`;
+              })
+              .join("");
+
+            return `
+              <tr class="border-b border-slate-100 hover:bg-slate-50 text-xs sm:text-sm">
+                <td class="px-3 py-2 text-center whitespace-nowrap">${mailBtnHtml}</td>
+                <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${i + 1}</td>
+                ${cellsHtml}
+                <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${escapeHtml(formatDateTime(item.createdAt))}</td>
+                <td class="px-3 py-2 whitespace-nowrap">
+                  <button
+                    type="button"
+                    data-del-item="${escapeHtml(item.id)}"
+                    class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200"
+                  >
+                    削除
+                  </button>
+                </td>
+              </tr>
+            `;
+          })
           .join("");
+
+        tbody.querySelectorAll("[data-mail-item]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const id = btn.getAttribute("data-mail-item");
+            const targetItem = rows.find((r) => r.id === id);
+            if (targetItem) {
+              sendConfirmationEmail(targetItem, folder);
+            }
+          });
+        });
 
         tbody.querySelectorAll("[data-del-item]").forEach((btn) => {
           btn.addEventListener("click", async () => {
@@ -563,7 +764,7 @@
               : state.events
                   .map((ev) => {
                     const sel = ev.id === state.selectedFolderId ? "selected" : "";
-                    return `<option value="${escapeHtml(ev.id)}" ${sel}>${escapeHtml(ev.name)}（${escapeHtml(formatEventDate(ev.eventDate))}）</option>`;
+                    return `<option value="${escapeHtml(ev.id)}" ${sel}>${escapeHtml(ev.name)}（${escapeHtml(formatEventDateTime(ev.eventDate))}）</option>`;
                   })
                   .join("");
         }
@@ -577,7 +778,7 @@
 
         if (label) {
           label.textContent = folder
-            ? `対象：${folder.name}（${formatEventDate(folder.eventDate)}）`
+            ? `対象：${folder.name}（${formatEventDateTime(folder.eventDate)}）`
             : "対象フォルダ：未選択";
         }
 
@@ -733,7 +934,6 @@
       showToast("JSONバックアップから復元しました", "success");
     }
 
-    // セル内の文字列長（全角・半角・改行）を読み取り、Excel列幅(pt)を自動算出
     function calcExcelColumnWidth(str) {
       const text = String(str ?? "");
       if (!text) return 68;
@@ -744,7 +944,6 @@
         let units = 0;
         for (const ch of line) {
           const code = ch.charCodeAt(0);
-          // 全角文字・日本語・記号は広め、半角英数字は狭めに見積もる
           const isWide =
             code > 0x00ff ||
             (code >= 0xff61 && code <= 0xff9f);
@@ -755,7 +954,6 @@
         }
       }
 
-      // 文字単位をExcel列幅(ポイント)へ変換し、左右余白を加える（最小68pt / 最大480pt）
       const widthPt = Math.ceil(maxLineUnits * 7.8 + 24);
       return Math.max(68, Math.min(480, widthPt));
     }
@@ -778,25 +976,12 @@
       try {
         const folder = state.events.find((e) => e.id === state.selectedFolderId);
         const rowsData = getFilteredAndSortedItems();
-
-        // フォルダで有効な入力項目を取得（データ側にあるキーも安全に拾う）
-        const folderFieldKeys = getFolderFields(folder);
-        const extraKeysFromItems = [];
-        rowsData.forEach((item) => {
-          if (item && typeof item === "object") {
-            FORM_FIELDS.forEach((f) => {
-              if (item[f.key] && !folderFieldKeys.includes(f.key) && !extraKeysFromItems.includes(f.key)) {
-                extraKeysFromItems.push(f.key);
-              }
-            });
-          }
-        });
-        const dynamicKeys = [...folderFieldKeys, ...extraKeysFromItems];
+        const dynamicKeys = getDisplayFieldKeysForFolder(folder, rowsData);
 
         const headers = [
           "No",
           "大会名",
-          "日にち",
+          "日時",
           ...dynamicKeys.map((k) => getFieldLabel(k)),
           "申込日時"
         ];
@@ -804,7 +989,7 @@
         const tableRows = rowsData.map((item, i) => [
           String(i + 1),
           String(folder?.name || item?.eventName || ""),
-          String(formatEventDate(folder?.eventDate || item?.eventDate || "")),
+          String(formatEventDateTime(folder?.eventDate || item?.eventDate || "")),
           ...dynamicKeys.map((k) => String(item?.[k] ?? "")),
           String(formatDateTime(item?.createdAt))
         ]);
@@ -914,6 +1099,7 @@
 
     document.addEventListener("DOMContentLoaded", () => {
       renderFolderFieldCheckboxes();
+      populateNewFolderDateSelectors();
 
       document.getElementById("gatePassInput")?.addEventListener("input", () => {
         setGateError("");
@@ -967,8 +1153,10 @@
             source: "form_url"
           });
           e.target.reset();
+          document.getElementById("applicantFormWrap")?.classList.add("hidden");
+          document.getElementById("applicantClosedBox")?.classList.add("hidden");
           document.getElementById("applicantDoneBox")?.classList.remove("hidden");
-          showToast("申し込みを送信しました", "success");
+          showToast("送信が完了しました。", "success");
         } catch (err) {
           console.error(err);
           showToast("送信に失敗しました", "error");
@@ -978,6 +1166,22 @@
             btn.textContent = "申し込む";
           }
         }
+      });
+
+      document.getElementById("continueInputBtn")?.addEventListener("click", () => {
+        document.getElementById("applicantForm")?.reset();
+        document.getElementById("applicantDoneBox")?.classList.add("hidden");
+        document.getElementById("applicantClosedBox")?.classList.add("hidden");
+        document.getElementById("applicantFormWrap")?.classList.remove("hidden");
+      });
+
+      document.getElementById("closeFormBtn")?.addEventListener("click", () => {
+        window.close();
+        setTimeout(() => {
+          document.getElementById("applicantDoneBox")?.classList.add("hidden");
+          document.getElementById("applicantFormWrap")?.classList.add("hidden");
+          document.getElementById("applicantClosedBox")?.classList.remove("hidden");
+        }, 120);
       });
 
       document.getElementById("lockBtn")?.addEventListener("click", () => {
@@ -995,6 +1199,7 @@
         document.getElementById("createFolderBox")?.classList.toggle("hidden", !state.isCreateFolderOpen);
         if (state.isCreateFolderOpen) {
           renderFolderFieldCheckboxes();
+          populateNewFolderDateSelectors();
           document.getElementById("newTournamentNameInput")?.focus();
         }
       });
@@ -1004,18 +1209,25 @@
         document.getElementById("createFolderBox")?.classList.add("hidden");
         document.getElementById("createFolderForm")?.reset();
         renderFolderFieldCheckboxes();
+        populateNewFolderDateSelectors();
       });
 
       document.getElementById("createFolderForm")?.addEventListener("submit", async (e) => {
         e.preventDefault();
         const tournamentName = document.getElementById("newTournamentNameInput")?.value.trim() || "";
-        const eventDate = document.getElementById("newTournamentDateInput")?.value || "";
+        const yearVal = String(document.getElementById("newFolderYearSelect")?.value || "").trim();
+        const monthVal = String(document.getElementById("newFolderMonthSelect")?.value || "").trim();
+        const dayVal = String(document.getElementById("newFolderDaySelect")?.value || "").trim();
         const checkedFields = Array.from(
           e.target.querySelectorAll('input[name="folderField"]:checked')
         ).map((el) => el.value);
 
-        if (!tournamentName || !eventDate) {
-          showToast("大会名と日にちを入力してください", "error");
+        if (!tournamentName) {
+          showToast("大会名を入力してください", "error");
+          return;
+        }
+        if (!yearVal || !monthVal || !dayVal) {
+          showToast("日時の年・月・日を選択してください", "error");
           return;
         }
         if (checkedFields.length === 0) {
@@ -1023,6 +1235,7 @@
           return;
         }
 
+        const eventDate = `${yearVal}-${monthVal}-${dayVal}`;
         const btn = document.getElementById("createFolderSubmitBtn");
         if (btn) btn.disabled = true;
         try {
@@ -1035,6 +1248,7 @@
           state.selectedFolderId = createdRef.id;
           e.target.reset();
           renderFolderFieldCheckboxes();
+          populateNewFolderDateSelectors();
           state.isCreateFolderOpen = false;
           document.getElementById("createFolderBox")?.classList.add("hidden");
           showToast("フォルダを作成しました", "success");
@@ -1190,20 +1404,50 @@
         <p id="applicantTournamentDate" class="text-xs sm:text-sm text-slate-600"></p>
       </div>
 
-      <div id="applicantDoneBox" class="hidden p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs sm:text-sm font-medium">
-        申し込みを受け付けました。続けて別の申し込みを入力することもできます。
+      <!-- 送信完了画面 -->
+      <div id="applicantDoneBox" class="hidden p-5 rounded-2xl bg-emerald-50 border border-emerald-200 space-y-4 text-center">
+        <div class="text-base font-bold text-emerald-900">送信が完了しました。</div>
+        <p class="text-xs sm:text-sm text-emerald-800">
+          申し込みを受け付けました。続けて入力される場合は「続けて入力」、終了する場合は「終了」を押してください。
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1">
+          <button
+            id="continueInputBtn"
+            type="button"
+            class="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold"
+          >
+            続けて入力
+          </button>
+          <button
+            id="closeFormBtn"
+            type="button"
+            class="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-sm font-semibold"
+          >
+            終了
+          </button>
+        </div>
       </div>
 
-      <form id="applicantForm" class="space-y-4">
-        <div id="applicantDynamicFields" class="space-y-4"></div>
-        <button
-          id="applicantSubmitBtn"
-          type="submit"
-          class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm"
-        >
-          申し込む
-        </button>
-      </form>
+      <!-- 終了後の案内 -->
+      <div id="applicantClosedBox" class="hidden p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3 text-center">
+        <div class="text-base font-bold text-slate-900">申し込みを終了しました。</div>
+        <p class="text-xs sm:text-sm text-slate-600">
+          画面が自動で閉じない場合は、ブラウザのタブまたは画面を閉じてください。
+        </p>
+      </div>
+
+      <div id="applicantFormWrap">
+        <form id="applicantForm" class="space-y-4">
+          <div id="applicantDynamicFields" class="space-y-4"></div>
+          <button
+            id="applicantSubmitBtn"
+            type="submit"
+            class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm"
+          >
+            申し込む
+          </button>
+        </form>
+      </div>
     </div>
   </section>
 
@@ -1320,13 +1564,27 @@
                   />
                 </div>
                 <div>
-                  <label for="newTournamentDateInput" class="block text-xs font-semibold text-slate-700 mb-1">日にち *</label>
-                  <input
-                    id="newTournamentDateInput"
-                    type="date"
-                    required
-                    class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <div class="block text-xs font-semibold text-slate-700 mb-1">日時 *（年・月・日）</div>
+                  <div class="grid grid-cols-3 gap-2">
+                    <select
+                      id="newFolderYearSelect"
+                      required
+                      aria-label="日時（年）"
+                      class="rounded-xl border border-slate-300 bg-white px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ></select>
+                    <select
+                      id="newFolderMonthSelect"
+                      required
+                      aria-label="日時（月）"
+                      class="rounded-xl border border-slate-300 bg-white px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ></select>
+                    <select
+                      id="newFolderDaySelect"
+                      required
+                      aria-label="日時（日）"
+                      class="rounded-xl border border-slate-300 bg-white px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    ></select>
+                  </div>
                 </div>
               </div>
 
@@ -1452,18 +1710,7 @@
         <div class="overflow-x-auto border border-slate-200 rounded-xl">
           <table class="w-full text-left border-collapse">
             <thead class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
-              <tr>
-                <th class="px-3 py-2 whitespace-nowrap">No</th>
-                <th class="px-3 py-2 whitespace-nowrap">氏名</th>
-                <th class="px-3 py-2 whitespace-nowrap">フリガナ</th>
-                <th class="px-3 py-2 whitespace-nowrap">学年</th>
-                <th class="px-3 py-2 whitespace-nowrap">性別</th>
-                <th class="px-3 py-2 whitespace-nowrap">種目</th>
-                <th class="px-3 py-2 whitespace-nowrap">連絡先</th>
-                <th class="px-3 py-2 whitespace-nowrap">住所</th>
-                <th class="px-3 py-2 whitespace-nowrap">申込日時</th>
-                <th class="px-3 py-2 whitespace-nowrap">操作</th>
-              </tr>
+              <tr id="listTableHeadRow"></tr>
             </thead>
             <tbody id="listTableBody"></tbody>
           </table>

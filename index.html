@@ -425,31 +425,27 @@
       const encSubject = encodeURIComponent(subject);
       const encBody = encodeURIComponent(body);
 
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
       let targetUrl = "";
-      let openInNewTab = false;
 
       if (appType === "gmail") {
-        targetUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encTo}&su=${encSubject}&body=${encBody}`;
-        openInNewTab = true;
+        if (isMobile) {
+          targetUrl = `googlegmail:///co?to=${encTo}&subject=${encSubject}&body=${encBody}`;
+        } else {
+          targetUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encTo}&su=${encSubject}&body=${encBody}`;
+        }
       } else if (appType === "yahoo") {
         targetUrl = `https://compose.mail.yahoo.co.jp/?to=${encTo}&subj=${encSubject}&body=${encBody}`;
-        openInNewTab = true;
       } else if (appType === "outlook") {
         targetUrl = `https://outlook.live.com/mail/0/deeplink/compose?to=${encTo}&subject=${encSubject}&body=${encBody}`;
-        openInNewTab = true;
       } else {
         targetUrl = `mailto:${encTo}?subject=${encSubject}&body=${encBody}`;
-        openInNewTab = false;
       }
 
       const itemId = item.id;
       closeMailAppPickerModal();
 
-      if (openInNewTab) {
-        window.open(targetUrl, "_blank", "noopener");
-      } else {
-        window.location.href = targetUrl;
-      }
+      window.location.href = targetUrl;
 
       try {
         await updateDoc(doc(db, "submissions", itemId), {
@@ -1169,8 +1165,8 @@
         const a = document.createElement("a");
         const baseFileName = sanitizeFileName(folder?.name || "申込者一覧");
         const dateStamp = new Date().toISOString().slice(0, 10);
-        a.href = url;
         a.download = `${baseFileName}_${dateStamp}.xls`;
+        a.href = url;
         document.body.appendChild(a);
         a.click();
         a.remove();
